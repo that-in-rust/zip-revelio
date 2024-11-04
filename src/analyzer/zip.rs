@@ -100,7 +100,6 @@ impl ParallelZipAnalyzer {
                 current_file: result.files.last()
                     .map(|f| f.path.display().to_string())
                     .unwrap_or_default(),
-                chunk_offset: current_offset,
                 compression_ratio: result.compressed_size as f64 / result.uncompressed_size as f64,
                 estimated_remaining_secs: ((file_size - current_offset) * start_time.elapsed().as_secs() as u64) / current_offset,
                 error_count: if result.error.is_some() { 1 } else { 0 },
@@ -113,8 +112,8 @@ impl ParallelZipAnalyzer {
         }
 
         let duration = start_time.elapsed();
-        let mut analysis = ChunkProcessor::merge_results(chunk_results)?;
-        analysis.stats.duration_ms = duration.as_millis() as u64;
+        let mut analysis = ChunkProcessor::merge_results(&chunk_results)?;
+        analysis.stats.duration = duration;
         
         Ok(analysis)
     }

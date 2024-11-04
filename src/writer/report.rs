@@ -88,10 +88,10 @@ impl ReportWriter {
              Chunks Processed: {}\n\
              Peak Memory Usage: {}MB\n\
              Error Count: {}\n\n",
-            analysis.stats.duration_ms,
-            analysis.stats.chunks_processed,
-            analysis.stats.peak_memory_mb,
-            analysis.stats.error_count,
+            analysis.stats.duration.as_millis(),
+            analysis.stats.chunks_processed.load(Ordering::Relaxed),
+            analysis.stats.peak_memory_mb.load(Ordering::Relaxed),
+            analysis.stats.error_count.load(Ordering::Relaxed),
         )
     }
 

@@ -1,7 +1,6 @@
 use std::sync::Arc;
 use indicatif::{ProgressBar, ProgressStyle};
 use tokio::sync::RwLock;
-use std::time::Duration;
 use crate::error::Result;
 
 #[derive(Debug, Clone)]
@@ -9,7 +8,6 @@ pub struct ProgressUpdate {
     pub bytes_processed: u64,
     pub files_processed: usize,
     pub current_file: String,
-    pub chunk_offset: u64,
     pub compression_ratio: f64,
     pub estimated_remaining_secs: u64,
     pub error_count: usize,
@@ -18,7 +16,7 @@ pub struct ProgressUpdate {
 pub struct ProgressConfig {
     pub update_frequency_ms: u64,
     pub style_template: String,
-    pub refresh_rate: Duration,
+    pub refresh_rate: std::time::Duration,
 }
 
 impl Default for ProgressConfig {
@@ -26,7 +24,7 @@ impl Default for ProgressConfig {
         Self {
             update_frequency_ms: 100,
             style_template: String::from("[{elapsed_precise}] {bar:40.cyan/blue} {pos:>7}/{len:7} {msg}"),
-            refresh_rate: Duration::from_millis(33),
+            refresh_rate: std::time::Duration::from_millis(33),
         }
     }
 }
@@ -84,65 +82,5 @@ impl ProgressTracker {
     pub fn finish(self) -> Result<()> {
         self.bar.finish_with_message("Analysis complete!");
         Ok(())
-    }
-
-    pub fn handle_interrupt(&self) -> Result<()> {
-        self.bar.abandon_with_message("Analysis interrupted!");
-        Ok(())
-    }
-
-    pub async fn get_stats(&self) -> ProgressStats {
-        self.stats.read().await.clone()
-    }
-}
-
-impl ProgressConfig {
-    pub fn builder() -> ProgressConfigBuilder {
-        ProgressConfigBuilder::default()
-    }
-}
-
-pub struct ProgressConfigBuilder {
-    update_frequency_ms: Option<u64>,
-    style_template: Option<String>,
-    refresh_rate: Option<Duration>,
-}
-
-impl Default for ProgressConfigBuilder {
-    fn default() -> Self {
-        Self {
-            update_frequency_ms: None,
-            style_template: None,
-            refresh_rate: None,
-        }
-    }
-}
-
-impl ProgressConfigBuilder {
-    pub fn update_frequency_ms(mut self, ms: u64) -> Self {
-        self.update_frequency_ms = Some(ms);
-        self
-    }
-
-    pub fn style_template(mut self, template: String) -> Self {
-        self.style_template = Some(template);
-        self
-    }
-
-    pub fn refresh_rate(mut self, rate: Duration) -> Self {
-        self.refresh_rate = Some(rate);
-        self
-    }
-
-    pub fn build(self) -> ProgressConfig {
-        ProgressConfig {
-            update_frequency_ms: self.update_frequency_ms.unwrap_or(100),
-            style_template: self.style_template.unwrap_or_else(|| 
-                String::from("[{elapsed_precise}] {bar:40.cyan/blue} {pos:>7}/{len:7} {msg}")
-            ),
-            refresh_rate: self.refresh_rate.unwrap_or_else(|| 
-                Duration::from_millis(33)
-            ),
-        }
     }
 }

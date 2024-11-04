@@ -20,125 +20,162 @@ src/
 ├── main.rs           // CLI + orchestration
 ├── models/
 │   ├── mod.rs        // Re-exports
-│   ├── file_info.rs  // From exp003
-│   └── analysis.rs   // Enhanced with compression stats
+│   ├── file_info.rs  // Core file metadata
+│   └── analysis.rs   // Analysis results + stats
 ├── analyzer/
 │   ├── mod.rs        // Re-exports
-│   ├── zip.rs        // ZIP analysis with rayon
-│   └── chunks.rs     // Chunked reading logic
+│   ├── zip.rs        // Async ZIP processing
+│   └── chunks.rs     // Parallel chunk handling
 ├── writer/
 │   ├── mod.rs        // Re-exports
-│   ├── report.rs     // From exp003 + enhancements
-│   └── progress.rs   // Progress reporting
-└── error.rs          // Custom error types
+│   ├── report.rs     // Analysis output
+│   └── progress.rs   // Progress tracking
+└── error.rs          // Error handling
 ```
 
-### Key Components
+### Core Components
 
-1. Parallel Processing Engine
+1. Async ZIP Engine
 ```rust
 pub struct ParallelZipAnalyzer {
     zip_path: PathBuf,
     chunk_size: usize,
     thread_count: usize,
+    buffer_pool: Arc<BufferPool>,
+    memory_limit: usize,
 }
 
-impl ParallelZipAnalyzer {
-    // Splits work between tokio and rayon:
-    // - tokio: async file I/O
-    // - rayon: parallel decompression of chunks
-    async fn analyze(&self) -> Result<ZipAnalysis> {
-        // Implementation
-    }
+pub struct BufferPool {
+    buffers: ArrayQueue<Vec<u8>>,
+    buffer_size: usize,
+    total_size: AtomicUsize,
 }
 ```
 
-2. Enhanced Analysis Model
+2. Chunk Processing
 ```rust
-pub struct ZipAnalysis {
-    pub files: Vec<FileInfo>,
-    pub total_size: u64,
-    pub compressed_size: u64,
-    pub compression_ratio: f64,
+pub struct ChunkProcessor {
+    chunk_size: usize,
+    compression_level: u32,
+    memory_limit: usize,
+    thread_count: usize,
+}
+
+pub struct ChunkResult {
+    offset: u64,
+    files: Vec<FileInfo>,
+    compressed_size: u64,
+    uncompressed_size: u64,
+    error: Option<AnalysisError>,
+    metrics: ChunkMetrics,
 }
 ```
 
-3. Progress Reporting
+3. Progress & Control
 ```rust
-pub struct ProgressTracker {
-    pub bytes_processed: AtomicU64,
-    pub files_processed: AtomicUsize,
-    pub current_file: Arc<RwLock<String>>,
+pub struct AnalyzerChannels {
+    progress_tx: mpsc::Sender<ProgressUpdate>,
+    chunk_results_tx: mpsc::Sender<ChunkResult>,
+    control_rx: watch::Receiver<ControlSignal>,
+}
+
+pub enum ControlSignal {
+    Continue,
+    Pause,
+    Stop { graceful: bool },
+    MemoryPressure { target_reduction: usize },
 }
 ```
 
-### Processing Flow
+### Processing Pipeline
 ```
-Single ZIP       Processing         Output
-    📥             🔄                📤
-ZIP File  ───┬─► Tokio I/O   ──┬─► Report
-             │                 │
-             ├─► Rayon Pool    │
-             │   (Chunks)      │
-             └─► Progress Bar ─┘
-```
-
-### Parallel Processing Strategy
-```
-                ┌─► Rayon Thread1 ──┐
-ZIP Chunks ──┬─►├─► Rayon Thread2 ──┼─► Merge
-             └─►└─► Rayon Thread3 ──┘   Results
+File I/O (tokio)     Processing (rayon)     Output
+    ↓                      ↓                   ↓
+Read Chunks    →    Parallel Analysis   →   Results
+    ↓                      ↓                   ↓
+Buffer Pool    →    Decompression      →   Progress
+    ↓                      ↓                   ↓
+Memory Monitor →    Error Recovery     →   Reports
 ```
 
 ### Memory Management
-```
-Heap Usage Control:
-┌────────────────┐
-│ Chunked Read   │◄─── 16MB chunks
-├────────────────┤
-│ Parallel Parse │◄─── Rayon Pool
-├────────────────┤
-│ Results Merge  │◄─── Sequential
-└────────────────┘
+```rust
+pub struct MemoryConfig {
+    chunk_size: usize,        // Default: 16MB
+    max_total_mem: usize,     // Default: 80% available RAM
+    buffer_pool_size: usize,  // Default: thread_count * 2
+    pressure_threshold: f32,  // Default: 0.85
+}
+
+pub struct MemoryMetrics {
+    current_usage: AtomicUsize,
+    peak_usage: AtomicUsize,
+    buffer_pool_size: AtomicUsize,
+    pressure_events: AtomicUsize,
+}
 ```
 
-### Error Handling Strategy
-```
-Error Types:
-├── IOError
-│   └── File access issues
-├── ZipError
-│   └── Archive corruption
-└── ProcessError
-    └── Analysis failures
+### Error Recovery Strategy
+```rust
+pub enum RecoveryAction {
+    Retry { max_attempts: u32 },
+    SkipChunk { log_error: bool },
+    ReduceMemory { target_bytes: usize },
+    Abort { cleanup: bool },
+}
+
+pub struct RecoveryMetrics {
+    retries: AtomicUsize,
+    skipped_chunks: AtomicUsize,
+    memory_reductions: AtomicUsize,
+}
 ```
 
 ### Performance Targets
-```
-Metrics:
-├── Throughput: >100MB/s
-├── Memory: <200MB base
-├── CPU: Scale to N-1 cores
-└── Latency: <50ms startup
+- Throughput: >100MB/s on SSD
+- Memory: <200MB baseline, scales with file size
+- CPU: Efficient use of available cores
+- Startup: <50ms to first progress update
+
+### Configuration
+```rust
+pub struct AnalyzerConfig {
+    chunk_size: usize,
+    thread_count: usize,
+    memory_limit: usize,
+    progress_interval: Duration,
+    recovery_policy: RecoveryPolicy,
+    buffer_pool_config: BufferPoolConfig,
+}
 ```
 
-### Configuration Options
+### Metrics Collection
+```rust
+pub struct AnalysisMetrics {
+    duration: Duration,
+    throughput: f64,
+    compression_ratio: f64,
+    memory_usage: MemoryMetrics,
+    error_counts: HashMap<ErrorType, usize>,
+    chunk_stats: ChunkMetrics,
+}
 ```
-Settings:
-├── chunk_size_mb: usize
-├── thread_count: usize
-└── progress_update_ms: u64
-```
+
+### Safety Considerations
+- Proper buffer management
+- Graceful shutdown handling
+- Memory pressure monitoring
+- Error recovery policies
+- Resource cleanup
+- Panic handling in worker threads
 
 ### Future Extensions
-```
-Roadmap:
-     │
-     ├── Multi-ZIP support
-     ├── Format detection
-     ├── Malware scanning
-     └── Network streaming
-```
+- Multi-archive support
+- Network streaming
+- Content analysis
+- Format detection
+- Malware scanning
+- Compression optimization
 
 Remember:
 - Tokio for async file I/O
@@ -350,32 +387,6 @@ impl std::fmt::Display for CompressionMethod {
 
 6. **Results Merging Strategy**
 ```rust
-pub fn merge_results(results: Vec<ChunkResult>) -> Result<ZipAnalysis> {
-    let mut files = Vec::new();
-    let chunks_processed = results.len();
-    
-    // Accumulate results from chunks
-    for result in &results {
-        files.extend(result.files.clone());
-        // ... compression stats calculation
-    }
-
-    Ok(ZipAnalysis {
-        files,
-        // ... analysis stats
-        stats: AnalysisStats {
-            chunks_processed,
-            error_count: results.iter()
-                              .filter(|r| r.error.is_some())
-                              .count(),
-            // ... other stats
-        }
-    })
-}
-```
-
-7. **Report Writing**
-```rust
 // writer/report.rs
 pub struct ReportWriter {
     output_path: PathBuf,
@@ -396,7 +407,7 @@ impl ReportWriter {
 }
 ```
 
-8. **Analysis Models**
+7. **Analysis Models**
 ```rust
 // models/analysis.rs
 pub struct ZipAnalysis {

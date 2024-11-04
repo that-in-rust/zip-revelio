@@ -1,0 +1,97 @@
+# Critical Safety Guidelines for ZIP Analyzer MVP
+
+## 1. Memory Safety
+- Use bounded buffers for chunk processing (16MB default)
+- Implement Drop for cleanup of resources
+- Avoid unbounded memory growth in progress tracking
+- Use Arc/Mutex for shared state instead of raw pointers
+
+## 2. Error Handling
+```rust
+// Always propagate errors with context
+#[derive(Debug, Error)]
+pub enum AnalysisError {
+    #[error("IO error at {offset}: {source}")]
+    Io { source: std::io::Error, offset: u64 },
+    #[error("ZIP error: {source}")]
+    Zip { source: zip::result::ZipError },
+}
+
+// Never unwrap in production code
+let file = File::open(path).context("Failed to open ZIP file")?;
+```
+
+## 3. Async/Threading Safety
+- Use spawn_blocking for ZIP decompression
+- Avoid blocking tokio runtime with CPU-intensive tasks
+- Properly close channels in drop implementations
+- Handle task cancellation gracefully
+
+## 4. Resource Management
+```rust
+impl Drop for ParallelZipAnalyzer {
+    fn drop(&mut self) {
+        // Signal workers to stop
+        // Close channels
+        // Free buffers
+        // Flush output
+    }
+}
+```
+
+## 5. Common Pitfalls
+- Don't use unwrap()/expect() except in tests
+- Avoid nested tokio runtimes
+- Don't share mutable state without synchronization
+- Handle partial results during errors
+
+## 6. MVP-Critical Checks
+```rust
+// Validate inputs
+if !path.exists() || path.metadata()?.len() == 0 {
+    return Err(AnalysisError::InvalidInput);
+}
+
+// Check memory limits
+if required_mem > MAX_MEMORY {
+    return Err(AnalysisError::MemoryLimit);
+}
+
+// Verify ZIP structure
+if !is_valid_zip_header(buffer) {
+    return Err(AnalysisError::InvalidFormat);
+}
+```
+
+## 7. Channel Usage
+```rust
+// Always use bounded channels
+let (tx, rx) = mpsc::channel(100);
+
+// Handle channel closure
+while let Ok(msg) = rx.recv().await {
+    // Process message
+}
+```
+
+## 8. Progress Tracking
+```rust
+// Use atomic types for counters
+bytes_processed: AtomicU64,
+files_processed: AtomicUsize,
+
+// Avoid deadlocks in progress updates
+let _ = progress_tx.send(update).await;
+```
+
+## 9. Testing Requirements
+- Test with corrupt ZIP files
+- Test with large files (>2GB)
+- Test memory pressure scenarios
+- Test cancellation during processing
+
+## 10. Performance Safety
+- Limit chunk size to avoid memory spikes
+- Use buffer pools to reduce allocations
+- Implement backpressure in processing pipeline
+- Monitor and log memory usage

@@ -1,15 +1,5 @@
-pub mod progress;
-pub mod report;
+mod progress;
+mod report;
 
-pub use self::{
-    progress::{
-        ProgressTracker,
-        ProgressConfig,
-    },
-    report::{
-        ReportWriter,
-        FormatConfig,
-        SizeFormat,
-        SortField,
-    },
-};
+pub use progress::{ProgressTracker, ProgressConfig, ProgressUpdate};
+pub use report::{ReportWriter, FormatConfig, SizeFormat, SortField};
