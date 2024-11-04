@@ -1,0 +1,428 @@
+# Parallel ZIP File Analyzer - PRD
+
+## Section 1: Core Requirements 🎯
+
+1. CLI tool to analyze a single ZIP file using parallel processing
+2. Uses tokio for async I/O and rayon for parallel decompression
+3. Outputs analysis to a text file
+4. Shows progress bar during analysis
+5. Handles large ZIP files (>10GB) efficiently via streaming
+6. Provides detailed file statistics and compression info
+7. Maintains memory efficiency through chunked processing
+8. Graceful error handling
+9. Simple CLI: `cargo run -- input.zip output.txt`
+
+## Section 2: Architecture 🏗️
+
+### Module Structure
+```
+src/
+├── main.rs           // CLI + orchestration
+├── models/
+│   ├── mod.rs        // Re-exports
+│   ├── file_info.rs  // From exp003
+│   └── analysis.rs   // Enhanced with compression stats
+├── analyzer/
+│   ├── mod.rs        // Re-exports
+│   ├── zip.rs        // ZIP analysis with rayon
+│   └── chunks.rs     // Chunked reading logic
+├── writer/
+│   ├── mod.rs        // Re-exports
+│   ├── report.rs     // From exp003 + enhancements
+│   └── progress.rs   // Progress reporting
+└── error.rs          // Custom error types
+```
+
+### Key Components
+
+1. Parallel Processing Engine
+```rust
+pub struct ParallelZipAnalyzer {
+    zip_path: PathBuf,
+    chunk_size: usize,
+    thread_count: usize,
+}
+
+impl ParallelZipAnalyzer {
+    // Splits work between tokio and rayon:
+    // - tokio: async file I/O
+    // - rayon: parallel decompression of chunks
+    async fn analyze(&self) -> Result<ZipAnalysis> {
+        // Implementation
+    }
+}
+```
+
+2. Enhanced Analysis Model
+```rust
+pub struct ZipAnalysis {
+    pub files: Vec<FileInfo>,
+    pub total_size: u64,
+    pub compressed_size: u64,
+    pub compression_ratio: f64,
+}
+```
+
+3. Progress Reporting
+```rust
+pub struct ProgressTracker {
+    pub bytes_processed: AtomicU64,
+    pub files_processed: AtomicUsize,
+    pub current_file: Arc<RwLock<String>>,
+}
+```
+
+### Processing Flow
+```
+Single ZIP       Processing         Output
+    📥             🔄                📤
+ZIP File  ───┬─► Tokio I/O   ──┬─► Report
+             │                 │
+             ├─► Rayon Pool    │
+             │   (Chunks)      │
+             └─► Progress Bar ─┘
+```
+
+### Parallel Processing Strategy
+```
+                ┌─► Rayon Thread1 ──┐
+ZIP Chunks ──┬─►├─► Rayon Thread2 ──┼─► Merge
+             └─►└─► Rayon Thread3 ──┘   Results
+```
+
+### Memory Management
+```
+Heap Usage Control:
+┌────────────────┐
+│ Chunked Read   │◄─── 16MB chunks
+├────────────────┤
+│ Parallel Parse │◄─── Rayon Pool
+├────────────────┤
+│ Results Merge  │◄─── Sequential
+└────────────────┘
+```
+
+### Error Handling Strategy
+```
+Error Types:
+├── IOError
+│   └── File access issues
+├── ZipError
+│   └── Archive corruption
+└── ProcessError
+    └── Analysis failures
+```
+
+### Performance Targets
+```
+Metrics:
+├── Throughput: >100MB/s
+├── Memory: <200MB base
+├── CPU: Scale to N-1 cores
+└── Latency: <50ms startup
+```
+
+### Configuration Options
+```
+Settings:
+├── chunk_size_mb: usize
+├── thread_count: usize
+└── progress_update_ms: u64
+```
+
+### Future Extensions
+```
+Roadmap:
+     │
+     ├── Multi-ZIP support
+     ├── Format detection
+     ├── Malware scanning
+     └── Network streaming
+```
+
+Remember:
+- Tokio for async file I/O
+- Rayon for parallel chunk processing
+- Streaming for memory efficiency
+- Clear progress feedback
+- Simple CLI interface
+
+This design balances:
+1. Performance via chunk parallelism
+2. Memory efficiency
+3. User experience
+4. Code maintainability
+
+### Terminal Setup Commands
+
+```bash
+# Navigate to project directory
+cd /home/amuldotexe/Desktop/GitHub202410/iiwii01/exp004
+
+# Create project structure in one command
+mkdir -p src/{models,analyzer,writer} && \
+touch src/main.rs \
+      src/error.rs \
+      src/models/{mod.rs,file_info.rs,analysis.rs} \
+      src/analyzer/{mod.rs,zip.rs,chunks.rs} \
+      src/writer/{mod.rs,report.rs,progress.rs}
+
+# Verify structure
+tree src/
+```
+
+Expected output:
+```
+src/
+├── analyzer
+│   ├── chunks.rs
+│   ├── mod.rs
+│   └── zip.rs
+├── error.rs
+├── main.rs
+├── models
+│   ├── analysis.rs
+│   ├── file_info.rs
+│   └── mod.rs
+└── writer
+    ├── mod.rs
+    ├── progress.rs
+    └── report.rs
+```
+
+### Detailed Module Specifications 📋
+
+1. **Module Re-exports & Interfaces**
+```rust
+// models/mod.rs
+pub use self::{
+    file_info::FileInfo,
+    analysis::{ZipAnalysis, PartialAnalysis, CompressionStats},
+};
+
+// analyzer/mod.rs
+pub use self::{
+    zip::ParallelZipAnalyzer,
+    chunks::{ChunkConfig, ChunkProcessor, ChunkResult},
+};
+
+// writer/mod.rs
+pub use self::{
+    progress::{ProgressTracker, ProgressUpdate},
+    report::ReportWriter,
+};
+```
+
+2. **Thread Communication**
+```rust
+// analyzer/zip.rs
+pub struct AnalyzerChannels {
+    progress_tx: mpsc::Sender<ProgressUpdate>,
+    chunk_results_tx: mpsc::Sender<ChunkResult>,
+    control_tx: watch::Sender<ControlSignal>,
+}
+
+#[derive(Debug, Clone)]
+pub enum ControlSignal {
+    Continue,
+    Pause,
+    Stop { graceful: bool },
+}
+
+pub struct ChunkResult {
+    offset: u64,
+    files: Vec<FileInfo>,
+    compressed_size: u64,
+    uncompressed_size: u64,
+    error: Option<AnalysisError>,
+}
+```
+
+3. **Error Handling**
+```rust
+// error.rs
+#[derive(Debug, thiserror::Error)]
+pub enum AnalysisError {
+    #[error("IO error at offset {offset}: {source}")]
+    Io { 
+        source: std::io::Error, 
+        offset: u64 
+    },
+    
+    #[error("ZIP error: {source}")]
+    Zip { 
+        source: zip::result::ZipError 
+    },
+    
+    #[error("Corruption at {offset}, processed {processed_bytes} bytes")]
+    Corrupt { 
+        offset: u64, 
+        processed_bytes: u64,
+        partial_results: Option<PartialAnalysis>,
+        recovery_possible: bool,
+    },
+    
+    #[error("Memory limit exceeded: needed {required}MB, limit {max_allowed}MB")]
+    Memory { 
+        required: u64, 
+        max_allowed: u64,
+        current_usage: u64,
+    },
+
+    #[error("Progress reporting error: {msg}")]
+    Progress { 
+        msg: String 
+    },
+
+    #[error("Other error: {source}")]
+    Other { 
+        source: String 
+    },
+}
+
+// Error Conversions
+impl From<std::io::Error> for AnalysisError {
+    fn from(error: std::io::Error) -> Self {
+        AnalysisError::Io { 
+            source: error,
+            offset: 0
+        }
+    }
+}
+
+impl From<anyhow::Error> for AnalysisError {
+    fn from(error: anyhow::Error) -> Self {
+        AnalysisError::Other { 
+            source: error.to_string() 
+        }
+    }
+}
+```
+
+4. **Progress Tracking**
+```rust
+#[derive(Clone)]
+pub struct ProgressTracker {
+    bar: Arc<ProgressBar>,
+    stats: Arc<RwLock<ProgressStats>>,
+    config: ProgressConfig,
+}
+
+pub struct ProgressStats {
+    bytes_processed: u64,
+    files_processed: usize,
+    current_file: String,
+    compression_ratio: f64,
+    estimated_remaining_secs: u64,
+    error_count: usize,
+}
+```
+
+5. **Compression Method Handling**
+```rust
+#[derive(Debug, Clone)]
+pub enum CompressionMethod {
+    Stored,
+    Deflated,
+    Other(u8),
+}
+
+impl From<zip::CompressionMethod> for CompressionMethod {
+    fn from(method: zip::CompressionMethod) -> Self {
+        match method {
+            zip::CompressionMethod::Stored => Self::Stored,
+            zip::CompressionMethod::Deflated => Self::Deflated,
+            other => Self::Other(other.into())
+        }
+    }
+}
+
+impl std::fmt::Display for CompressionMethod {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Stored => write!(f, "Stored"),
+            Self::Deflated => write!(f, "Deflated"),
+            Self::Other(n) => write!(f, "Method({})", n)
+        }
+    }
+}
+```
+
+6. **Results Merging Strategy**
+```rust
+pub fn merge_results(results: Vec<ChunkResult>) -> Result<ZipAnalysis> {
+    let mut files = Vec::new();
+    let chunks_processed = results.len();
+    
+    // Accumulate results from chunks
+    for result in &results {
+        files.extend(result.files.clone());
+        // ... compression stats calculation
+    }
+
+    Ok(ZipAnalysis {
+        files,
+        // ... analysis stats
+        stats: AnalysisStats {
+            chunks_processed,
+            error_count: results.iter()
+                              .filter(|r| r.error.is_some())
+                              .count(),
+            // ... other stats
+        }
+    })
+}
+```
+
+7. **Report Writing**
+```rust
+// writer/report.rs
+pub struct ReportWriter {
+    output_path: PathBuf,
+    format_config: FormatConfig,
+}
+
+pub struct FormatConfig {
+    include_headers: bool,
+    size_format: SizeFormat,
+    sort_by: SortField,
+    timestamp_format: String,
+}
+
+impl ReportWriter {
+    pub fn new(path: PathBuf, config: FormatConfig) -> Self;
+    pub async fn write(&self, analysis: &ZipAnalysis) -> Result<()>;
+    pub async fn write_partial(&self, partial: &PartialAnalysis) -> Result<()>;
+}
+```
+
+8. **Analysis Models**
+```rust
+// models/analysis.rs
+pub struct ZipAnalysis {
+    pub files: Vec<FileInfo>,
+    pub total_size: u64,
+    pub compressed_size: u64,
+    pub compression_ratio: f64,
+    pub stats: AnalysisStats,
+}
+
+pub struct AnalysisStats {
+    pub duration_ms: u64,
+    pub chunks_processed: usize,
+    pub error_count: usize,
+    pub peak_memory_mb: usize,
+}
+
+// models/file_info.rs
+pub struct FileInfo {
+    pub path: PathBuf,
+    pub size: u64,
+    pub compressed_size: u64,
+    pub compression_method: CompressionMethod,
+    pub crc32: u32,
+    pub modified: DateTime<Utc>,
+}
+```
+
+
