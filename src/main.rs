@@ -67,7 +67,7 @@ fn setup_progress_bar(total_size: u64) -> ProgressBar {
     let pb = ProgressBar::new(total_size);
     pb.set_style(
         ProgressStyle::default_bar()
-            .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {bytes}/{total_bytes} ({eta}) [{:.1}% compressed] [ZIP entries: {msg}]")
+            .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {bytes}/{total_bytes} ({eta}) [{msg}]")
             .unwrap()
             .progress_chars("=>-")
     );
@@ -120,7 +120,7 @@ async fn process_zip(
     path: PathBuf,
     pb: ProgressBar,
     running: Arc<AtomicBool>,
-    threads: Option<usize>,
+    _threads: Option<usize>,
 ) -> Result<ZipAnalysis> {
     // Validate input
     if !path.exists() {
@@ -131,10 +131,11 @@ async fn process_zip(
     
     // Initialize with proper error handling
     let mut reader = ZipReader::new(path).await?;
-    let processor = Processor::new_with_threads(threads)?;
+    let processor = Processor::new()
+        .map_err(|e| Error::Processing(format!("Failed to create processor: {}", e)))?;
     
     let results = Arc::new(RwLock::new(ZipAnalysis::new()));
-    let results_clone = Arc::clone(&results);
+    let progress_tracker = Arc::clone(&results);
     
     let mut stream = reader.stream_chunks();
     while let Some(chunk_result) = stream.next().await {
@@ -150,7 +151,7 @@ async fn process_zip(
             .map_err(|e| Error::Processing(format!("Chunk processing failed: {}", e)))?;
 
         // Update progress
-        let current = results_clone.read();
+        let current = progress_tracker.read();
         pb.set_message(format!(
             "{} files, {:.1}% compressed",
             current.file_count(),
@@ -159,9 +160,12 @@ async fn process_zip(
         pb.set_position(current.total_size() as u64);
     }
 
-    Ok(Arc::try_unwrap(results)
-        .map_err(|_| Error::Processing("Could not unwrap results".into()))?
-        .into_inner())
+    // Explicit drop of clone before unwrap
+    drop(progress_tracker);
+    
+    Arc::try_unwrap(results)
+        .expect("All references should be dropped")
+        .into_inner()
 }
 
 #[tokio::main]

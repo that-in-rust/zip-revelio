@@ -458,26 +458,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "exp004"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "clap",
- "criterion",
- "ctrlc",
- "futures",
- "indicatif",
- "num_cpus",
- "parking_lot",
- "pin-project-lite",
- "rayon",
- "tempfile",
- "thiserror",
- "tokio",
- "zip",
-]
-
-[[package]]
 name = "fastrand"
 version = "2.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1495,6 +1475,26 @@ dependencies = [
  "sha1",
  "time",
  "zstd",
+]
+
+[[package]]
+name = "zip-revelio"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "criterion",
+ "ctrlc",
+ "futures",
+ "indicatif",
+ "num_cpus",
+ "parking_lot",
+ "pin-project-lite",
+ "rayon",
+ "tempfile",
+ "thiserror",
+ "tokio",
+ "zip",
 ]
 
 [[package]]

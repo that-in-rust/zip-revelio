@@ -799,3 +799,141 @@ cargo test                   # Run tests
        .stack_size(8 * 1024 * 1024)
        .build()?;
    ```
+
+## Error Prevention Patterns - Updated 📋
+
+### 1. Constants Usage
+```rust
+// WRONG ❌
+if &data[0..4] != b"PK\x03\x04" {
+    return Err(Error::Zip("Invalid signature".into()));
+}
+
+// CORRECT ✅
+if &data[0..4] != &ZIP_LOCAL_HEADER_SIGNATURE.to_le_bytes() {
+    return Err(Error::Zip("Invalid signature".into()));
+}
+```
+
+### 2. Struct Field Usage
+```rust
+// WRONG ❌
+pub struct ZipHeader {
+    pub unused_field: String,  // Dead code warning
+}
+
+// CORRECT ✅
+#[derive(Debug, Clone)]
+pub struct ZipHeader {
+    #[allow(dead_code)]  // Explicitly acknowledge unused
+    pub future_field: String,
+    
+    // OR remove if truly unused
+    // pub unused_field: String,
+}
+```
+
+### 3. Constructor Pattern
+```rust
+// WRONG ❌
+fn main() {
+    let processor = Processor::new_with_threads(None);  // Bypassing standard constructor
+}
+
+// CORRECT ✅
+fn main() {
+    let processor = Processor::new()?;  // Use standard constructor
+    // OR
+    let processor = Processor::new_with_threads(Some(4))?;  // Explicit about custom needs
+}
+```
+
+### 4. Error Propagation
+```rust
+// WRONG ❌
+fn process_all(&self) -> Result<()> {
+    self.results.unwrap()?;  // Direct unwrap
+}
+
+// CORRECT ✅
+fn process_all(&self) -> Result<()> {
+    let results = self.results
+        .ok_or_else(|| Error::Processing("No results available".into()))?;
+    Ok(())
+}
+```
+
+## Implementation Checklist - Updated ✅
+
+1. Constants:
+   - [ ] Use defined constants instead of magic values
+   - [ ] Convert constants to proper byte representation
+   - [ ] Document constant usage in comments
+
+2. Struct Fields:
+   - [ ] Review all struct fields for usage
+   - [ ] Either use or explicitly mark as future use
+   - [ ] Remove truly unused fields
+   - [ ] Document field purpose
+
+3. Constructors:
+   - [ ] Implement and use standard constructors
+   - [ ] Document when to use specialized constructors
+   - [ ] Add validation in constructors
+   - [ ] Test constructor error cases
+
+4. Error Handling:
+   - [ ] No direct unwraps in production code
+   - [ ] Proper error context in messages
+   - [ ] Complete error propagation chain
+   - [ ] Test error scenarios
+
+## Testing Requirements - Updated 🧪
+
+1. Constants:
+```rust
+#[test]
+fn test_signature_validation() {
+    assert_eq!(
+        &ZIP_LOCAL_HEADER_SIGNATURE.to_le_bytes(),
+        b"PK\x03\x04"
+    );
+}
+```
+
+2. Struct Usage:
+```rust
+#[test]
+fn test_header_fields() {
+    let header = ZipHeader::new(
+        STORED,
+        100,
+        100,
+        "test.txt".into(),
+        false,
+        0
+    );
+    assert_eq!(header.compression_method, STORED);
+}
+```
+
+3. Constructor Tests:
+```rust
+#[test]
+fn test_processor_creation() {
+    assert!(Processor::new().is_ok());
+    assert!(Processor::new_with_threads(Some(1)).is_ok());
+}
+```
+
+4. Error Handling:
+```rust
+#[test]
+fn test_error_propagation() {
+    let result = process_invalid_data();
+    assert!(matches!(
+        result,
+        Err(Error::Processing(_))
+    ));
+}
+```

@@ -14,8 +14,11 @@ pub struct ZipHeader {
     pub compression_method: u16,
     pub compressed_size: u64,
     pub uncompressed_size: u64,
+    #[allow(dead_code)]  // Fields kept for future features
     pub file_name: String,
+    #[allow(dead_code)]
     pub is_encrypted: bool,
+    #[allow(dead_code)]
     pub crc32: u32,
 }
 

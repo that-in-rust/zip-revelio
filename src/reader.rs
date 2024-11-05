@@ -28,22 +28,26 @@ impl ZipReader {
     /// Create a new ZIP reader with validation
     pub async fn new(path: PathBuf) -> Result<Self> {
         let metadata = tokio::fs::metadata(&path).await
-            .map_err(|e| Error::Io(format!("Failed to read metadata: {}", e)))?;
+            .map_err(|e| Error::Io(format!("Failed to read metadata for {}: {}", path.display(), e)))?;
 
-        // Essential validations
+        // Essential validations with better messages
         if metadata.len() == 0 {
-            return Err(Error::Zip("Empty file".into()));
+            return Err(Error::Zip(format!("File {} is empty", path.display())));
         }
         if metadata.len() > MAX_FILE_SIZE {
-            return Err(Error::Zip("File too large (>4GB not supported)".into()));
+            return Err(Error::Zip(format!(
+                "File {} is too large ({} bytes > 4GB)", 
+                path.display(), 
+                metadata.len()
+            )));
         }
 
         let file = File::open(&path).await
-            .map_err(|e| Error::Io(format!("Failed to open file: {}", e)))?;
+            .map_err(|e| Error::Io(format!("Failed to open {}: {}", path.display(), e)))?;
 
         Ok(Self {
             file,
-            chunk_size: CHUNK_SIZE,  // Use constant instead of magic number
+            chunk_size: CHUNK_SIZE,
             total_size: metadata.len(),
             position: 0,
         })
@@ -56,16 +60,6 @@ impl ZipReader {
             reader: self,
             buffer: vec![0; chunk_size],  // Use cached size
         }
-    }
-    
-    /// Get total file size
-    pub fn total_size(&self) -> u64 {
-        self.total_size
-    }
-    
-    /// Get current position
-    pub fn position(&self) -> u64 {
-        self.position
     }
 }
 

@@ -11,3 +11,7 @@ Core Requirements 🎯
 7. Maintains memory efficiency through chunked processing
 8. Graceful error handling
 9. Simple CLI: `cargo run -- input.zip output.txt`
+
+e.g.
+1.
+cargo run -- /home/amuldotexe/Downloads/node-main.zip /home/amuldotexe/Downloads/node-main-20241105.txt

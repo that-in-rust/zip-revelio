@@ -1,6 +1,6 @@
 use rayon;
 
-use crate::types::{Chunk, ZipAnalysis, Error, Result, ZipHeader};
+use crate::types::{Chunk, ZipAnalysis, Error, Result, ZipHeader, ZIP_LOCAL_HEADER_SIGNATURE};
 
 /// Processor for parallel ZIP chunk analysis
 pub struct Processor {
@@ -32,39 +32,41 @@ impl Processor {
         self.thread_pool.install(|| {
             // Basic validation
             if chunk.data().len() < 30 {
-                return Err(Error::Zip("Invalid chunk size".into()));
+                return Ok(()); // Skip invalid chunks silently
             }
             
-            // Check ZIP signature
-            if &chunk.data()[0..4] != b"PK\x03\x04" {
-                return Err(Error::Zip("Invalid ZIP signature".into()));
+            // Only check signature for first chunk (at offset 0)
+            if chunk.offset() == 0 {
+                if &chunk.data()[0..4] != &ZIP_LOCAL_HEADER_SIGNATURE.to_le_bytes() {
+                    return Err(Error::Zip("Invalid ZIP signature".into()));
+                }
             }
 
-            // Parse header
-            if let Some(header) = self.parse_zip_header(chunk.data()) {
-                // Update stats
-                results.add_size(chunk.size());
-                results.update_compression_method(header.compression_method);
-                results.update_sizes(header.compressed_size, header.uncompressed_size);
-                
-                // Calculate basic compression ratio
-                let ratio = if header.uncompressed_size > 0 {
-                    1.0 - (header.compressed_size as f64 / header.uncompressed_size as f64)
-                } else {
-                    0.0
-                };
-                results.update_compression(ratio);
-                
-                // Add file type
-                results.add_file_type("ZIP".into());
+            // Parse header and handle results explicitly
+            match self.parse_zip_header(chunk.data()) {
+                Some(header) => {
+                    // Update stats
+                    results.add_size(chunk.size());
+                    results.update_compression_method(header.compression_method);
+                    results.update_sizes(header.compressed_size, header.uncompressed_size);
+                    
+                    // Calculate basic compression ratio
+                    let ratio = if header.uncompressed_size > 0 {
+                        1.0 - (header.compressed_size as f64 / header.uncompressed_size as f64)
+                    } else {
+                        0.0
+                    };
+                    results.update_compression(ratio);
+                    results.add_file_type("ZIP".into());
+                    Ok(())
+                },
+                None => Ok(()) // Skip if header parsing fails
             }
-
-            Ok(())
         })
     }
 
     fn parse_zip_header(&self, data: &[u8]) -> Option<ZipHeader> {
-        if data.len() < 30 || &data[0..4] != b"PK\x03\x04" {
+        if data.len() < 30 {
             return None;
         }
 
@@ -101,17 +103,12 @@ impl Processor {
 
     /// Create a new processor with custom thread count
     pub fn new_with_threads(threads: Option<usize>) -> Result<Self> {
-        let mut builder = rayon::ThreadPoolBuilder::new()
-            .stack_size(8 * 1024 * 1024);
-        
-        if let Some(count) = threads {
-            builder = builder.num_threads(count);
-        }
-        
-        let thread_pool = builder.build()
-            .map_err(|e| Error::Processing(e.to_string()))?;
-        
-        Ok(Self { thread_pool })
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(threads.unwrap_or_else(num_cpus::get))
+            .stack_size(8 * 1024 * 1024)
+            .build()
+            .map(|thread_pool| Self { thread_pool })
+            .map_err(|e| Error::Processing(e.to_string()))
     }
 }
 
