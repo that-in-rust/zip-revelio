@@ -664,3 +664,138 @@ Add:
    - Threads properly joined
    - Cancellation handled
    ```
+
+## Essential Trait Imports 🔑
+1. Async/Future Patterns:
+   ```rust
+   // MUST include for async operations:
+   use futures::{Stream, Future};  // Future needed for poll()
+   use pin_project_lite::pin_project;
+   use std::task::{Context, Poll};
+   ```
+
+2. Import Guidelines:
+   ```rust
+   // WRONG ❌
+   use rayon::ThreadPoolBuilder;  // Direct import
+   
+   // CORRECT ✅
+   use rayon::ThreadPool;  // Use type directly
+   // OR
+   use rayon;  // Use through module path: rayon::ThreadPoolBuilder
+   ```
+
+## Variable Usage Patterns 📋
+1. Time Measurement:
+   ```rust
+   // WRONG ❌
+   let start_time = Instant::now();  // Unused
+   
+   // CORRECT ✅
+   let start_time = Instant::now();
+   // ... code ...
+   let elapsed = start_time.elapsed();
+   // OR
+   let _start_time = Instant::now();  // Explicitly mark as unused
+   ```
+
+## Implementation Checklist ✅
+Add:
+- [ ] Verify all trait imports before async/Future usage
+- [ ] Check variable usage or prefix unused with _
+- [ ] Validate import usage patterns
+- [ ] Run clippy before commits
+
+## Common Pitfalls 🚫
+Add:
+1. Async/Future Issues:
+   - Missing Future trait import
+   - Incorrect Poll usage
+   - Pin pattern mistakes
+
+2. Import Issues:
+   - Unused direct imports
+   - Missing trait imports
+   - Over-specific imports
+
+3. Variable Usage:
+   - Unused time measurements
+   - Unused variables without _
+   - Dead code warnings
+
+## Pre-Commit Validation 🔍
+```bash
+# MUST run before commit:
+cargo clippy -- -D warnings  # Treat warnings as errors
+cargo check                  # Verify compilation
+cargo test                   # Run tests
+```
+
+## Essential Imports & Traits 🔑
+1. Async/Stream:
+   ```rust
+   use futures::{Stream, Future};  // For async operations
+   use pin_project_lite::pin_project;  // For stream implementation
+   use std::task::{Context, Poll};  // For async control
+   ```
+
+2. Thread Safety:
+   ```rust
+   use std::sync::atomic::{AtomicUsize, Ordering};  // For counters
+   use parking_lot::RwLock;  // For shared state
+   ```
+
+3. Error Handling:
+   ```rust
+   use thiserror::Error;  // For error types
+   impl From<std::io::Error> for Error { }  // For error conversion
+   ```
+
+## Validation Patterns 🛡️
+1. File Size:
+   ```rust
+   if metadata.len() > MAX_FILE_SIZE {
+       return Err(Error::Zip("File too large (>4GB not supported)".into()));
+   }
+   ```
+
+2. ZIP Signature:
+   ```rust
+   if &data[0..4] != b"PK\x03\x04" {
+       return Err(Error::Zip("Invalid ZIP signature".into()));
+   }
+   ```
+
+3. ASCII Filenames:
+   ```rust
+   if !file_name.is_ascii() {
+       return None;  // Skip non-ASCII filenames
+   }
+   ```
+
+## Resource Management 🔧
+1. File Handles:
+   ```rust
+   // Always use async file operations
+   let file = File::open(&path).await
+       .map_err(|e| Error::Io(format!("Failed to open: {}", e)))?;
+   ```
+
+2. Memory:
+   ```rust
+   // Cache values before borrowing
+   let chunk_size = self.chunk_size;
+   ChunkStream {
+       reader: self,
+       buffer: vec![0; chunk_size],
+   }
+   ```
+
+3. Thread Pool:
+   ```rust
+   // Configure thread pool once
+   let thread_pool = rayon::ThreadPoolBuilder::new()
+       .num_threads(num_cpus::get())
+       .stack_size(8 * 1024 * 1024)
+       .build()?;
+   ```

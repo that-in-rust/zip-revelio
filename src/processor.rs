@@ -1,10 +1,13 @@
-use rayon::ThreadPoolBuilder;
+use rayon;
 
 use crate::types::{Chunk, ZipAnalysis, Error, Result, ZipHeader};
 
 /// Processor for parallel ZIP chunk analysis
 pub struct Processor {
-    /// Thread pool for parallel processing with 8MB stack size
+    /// Thread pool configuration:
+    /// - 8MB stack size
+    /// - Number of CPU cores
+    /// - Optimized for parallel processing
     thread_pool: rayon::ThreadPool,
 }
 

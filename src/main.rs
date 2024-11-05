@@ -127,7 +127,7 @@ async fn process_zip(
         return Err(Error::Io("Input file does not exist".into()));
     }
 
-    let start_time = Instant::now();
+    let _start_time = Instant::now();
     
     // Initialize with proper error handling
     let mut reader = ZipReader::new(path).await?;

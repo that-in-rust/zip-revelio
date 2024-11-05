@@ -2,6 +2,7 @@ use tokio::fs::File;
 use tokio::io::{AsyncReadExt};
 use std::path::PathBuf;
 use futures::Stream;
+use std::future::Future;
 use pin_project_lite::pin_project;
 use std::pin::Pin;
 use std::task::{Context, Poll};
@@ -68,6 +69,13 @@ impl ZipReader {
     }
 }
 
+impl Drop for ZipReader {
+    fn drop(&mut self) {
+        // Ensure file handle is properly closed and synced
+        let _ = futures::executor::block_on(self.file.sync_all());
+    }
+}
+
 // Custom stream implementation for chunk reading
 pin_project! {
     struct ChunkStream<'a> {
@@ -88,16 +96,17 @@ impl<'a> Stream for ChunkStream<'a> {
         }
         
         let fut = this.reader.file.read(this.buffer);
-        match futures::ready!(Pin::new(&mut Box::pin(fut)).poll(cx)) {
-            Ok(0) => Poll::Ready(None),
-            Ok(bytes_read) => {
+        match Pin::new(&mut Box::pin(fut)).poll(cx) {
+            Poll::Ready(Ok(0)) => Poll::Ready(None),
+            Poll::Ready(Ok(bytes_read)) => {
                 this.reader.position += bytes_read as u64;
                 Poll::Ready(Some(Ok(Chunk::new(
                     this.buffer[..bytes_read].to_vec(),
                     this.reader.position - bytes_read as u64
                 ))))
             }
-            Err(e) => Poll::Ready(Some(Err(Error::Io(e.to_string()))))
+            Poll::Ready(Err(e)) => Poll::Ready(Some(Err(Error::Io(e.to_string())))),
+            Poll::Pending => Poll::Pending,
         }
     }
 }
