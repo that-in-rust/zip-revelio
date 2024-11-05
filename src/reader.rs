@@ -69,33 +69,31 @@ impl ZipReader {
 
 // Custom stream implementation for chunk reading
 pin_project! {
-    struct ChunkStream {
+    struct ChunkStream<'a> {
         #[pin]
-        reader: ZipReader,
+        reader: &'a mut ZipReader,
         buffer: Vec<u8>,
     }
 }
 
-impl Stream for ChunkStream {
+impl<'a> Stream for ChunkStream<'a> {
     type Item = Result<Chunk>;
     
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        let this = self.project();
-        let reader = &mut this.reader;
-        let buffer = &mut this.buffer;
+        let mut this = self.project();
         
-        if reader.position >= reader.total_size {
+        if this.reader.position >= this.reader.total_size {
             return Poll::Ready(None);
         }
         
-        let fut = reader.file.read(buffer);
+        let fut = this.reader.file.read(this.buffer);
         match futures::ready!(Pin::new(&mut Box::pin(fut)).poll(cx)) {
             Ok(0) => Poll::Ready(None),
             Ok(bytes_read) => {
-                reader.position += bytes_read as u64;
+                this.reader.position += bytes_read as u64;
                 Poll::Ready(Some(Ok(Chunk::new(
-                    buffer[..bytes_read].to_vec(),
-                    reader.position - bytes_read as u64
+                    this.buffer[..bytes_read].to_vec(),
+                    this.reader.position - bytes_read as u64
                 ))))
             }
             Err(e) => Poll::Ready(Some(Err(Error::Io(e.to_string()))))

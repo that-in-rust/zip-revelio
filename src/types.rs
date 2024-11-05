@@ -6,7 +6,6 @@ pub const DEFLATED: u16 = 8;
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
 use parking_lot::RwLock;
 use thiserror::Error;
 

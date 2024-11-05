@@ -178,34 +178,137 @@ Added:
 
 === Development Strategy & Process ===
 
-## Code Evolution Process 🔄
-1. Initial Implementation:
+## Type System Validation 🔍
+1. Pin and Project:
    ```rust
-   // 1. Start with core types
-   pub struct ZipHeader { ... }
-   pub struct ZipAnalysis { ... }
-   
-   // 2. Add essential traits
-   impl From<std::io::Error> for Error { ... }
-   impl Stream for ChunkStream { ... }
+   // Always use this pattern for Stream implementations
+   pin_project! {
+       struct ChunkStream<'a> {
+           #[pin]
+           reader: &'a mut ZipReader,  // Note lifetime
+           buffer: Vec<u8>,
+       }
+   }
+
+   impl<'a> Stream for ChunkStream<'a> {
+       fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+           let mut this = self.project();  // Always mut
+           // ...
+       }
+   }
    ```
 
-2. Validation Steps:
+2. Import Management:
+   ```rust
+   // Required imports section in each file
+   mod types {
+       // Essential imports only
+       use std::sync::atomic::{AtomicUsize, Ordering};
+       use parking_lot::RwLock;
+       // No unused imports
+   }
+   ```
+
+## Code Quality Checks 🛡️
+1. Pre-commit Checks:
    ```bash
-   # After each module:
-   cargo check              # Type system validation
-   cargo clippy            # Code quality
-   cargo test              # Functionality
-   cargo fmt              # Style consistency
+   # Must run before any commit:
+   cargo check
+   cargo clippy -- -D warnings  # Treat warnings as errors
+   cargo fmt -- --check
+   cargo test
    ```
 
-3. Cross-Module Verification:
+2. Module Dependencies:
    ```rust
-   // Check all dependent modules when changing:
-   mod types;    // Core types -> Check all files
-   mod reader;   // IO operations -> Check processor
-   mod processor;// Processing -> Check main
+   // Document required features
+   #[cfg(feature = "async")]
+   use tokio;
+   
+   #[cfg(feature = "parallel")]
+   use rayon;
    ```
+
+## Error Prevention Patterns 📋
+1. Ownership Rules:
+   ```rust
+   // Always document ownership requirements
+   struct Reader {
+       // Owned fields
+       file: File,            // Owns the file
+       buffer: Vec<u8>,       // Owns the buffer
+       
+       // Reference fields
+       config: &'a Config,    // Borrows configuration
+   }
+   ```
+
+2. Mutability Guidelines:
+   ```rust
+   // Always be explicit about mutability
+   impl<'a> Stream for DataStream<'a> {
+       fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+           let mut this = self.project();  // Always mut for project()
+           // ...
+       }
+   }
+   ```
+
+## Implementation Checklist ✅
+1. Before Code:
+   - [ ] Review blueprint requirements
+   - [ ] List required traits and types
+   - [ ] Plan error handling strategy
+   - [ ] Design thread safety approach
+
+2. During Implementation:
+   - [ ] Start with core types
+   - [ ] Add essential traits
+   - [ ] Implement error handling
+   - [ ] Add thread safety
+   - [ ] Write basic tests
+
+3. After Each Module:
+   - [ ] Run cargo check
+   - [ ] Run clippy
+   - [ ] Run tests
+   - [ ] Verify cross-module impacts
+   - [ ] Check resource cleanup
+
+4. Final Integration:
+   - [ ] Verify all trait bounds
+   - [ ] Check error conversions
+   - [ ] Test thread safety
+   - [ ] Validate resource handling
+   - [ ] Run full test suite
+
+Add:
+- [ ] Verify all imports are used
+- [ ] Check Pin/Project usage
+- [ ] Validate mutability requirements
+- [ ] Test async/stream implementations
+- [ ] Run clippy with warnings as errors
+
+## Common Pitfalls 🚫
+1. Stream Implementation:
+   - Always use mut with project()
+   - Handle Pin correctly
+   - Proper lifetime annotations
+
+2. Import Management:
+   - No wildcard imports (prelude::*)
+   - Remove unused imports
+   - Group imports logically
+
+3. Ownership/Borrowing:
+   - Document lifetime requirements
+   - Clear ownership boundaries
+   - Explicit mutability
+
+4. Async/Stream:
+   - Proper Future/Stream traits
+   - Handle Pin correctly
+   - Test cancellation
 
 ## LLM Prompting Strategy 🤖
 1. Core Implementation:
@@ -247,55 +350,21 @@ Added:
    4. Resource handling issues
    ```
 
-## Implementation Checklist ✅
-1. Before Code:
-   - [ ] Review blueprint requirements
-   - [ ] List required traits and types
-   - [ ] Plan error handling strategy
-   - [ ] Design thread safety approach
+## Testing Requirements
+[Previous testing sections...]
 
-2. During Implementation:
-   - [ ] Start with core types
-   - [ ] Add essential traits
-   - [ ] Implement error handling
-   - [ ] Add thread safety
-   - [ ] Write basic tests
+Add:
+```rust
+#[test]
+fn test_stream_implementation() {
+    // Test stream behavior
+    // Test cancellation
+    // Test error propagation
+}
 
-3. After Each Module:
-   - [ ] Run cargo check
-   - [ ] Run clippy
-   - [ ] Run tests
-   - [ ] Verify cross-module impacts
-   - [ ] Check resource cleanup
-
-4. Final Integration:
-   - [ ] Verify all trait bounds
-   - [ ] Check error conversions
-   - [ ] Test thread safety
-   - [ ] Validate resource handling
-   - [ ] Run full test suite
-
-## Error Prevention Strategy 🛡️
-1. Type System:
-   - Use type-driven development
-   - Start with trait bounds
-   - Implement From for errors
-   - Verify generic constraints
-
-2. Resource Safety:
-   - Implement Drop for cleanup
-   - Use RAII patterns
-   - Add cancellation support
-   - Handle async cleanup
-
-3. Thread Safety:
-   - Use atomic types
-   - Implement sync traits
-   - Verify lock ordering
-   - Test concurrent access
-
-4. Error Handling:
-   - Define error types first
-   - Add context to errors
-   - Handle all Result types
-   - Test error paths
+#[test]
+fn test_ownership_patterns() {
+    // Test borrowing rules
+    // Test lifetime constraints
+    // Test mutability requirements
+}

@@ -1,4 +1,4 @@
-use rayon::prelude::*;
+use rayon::ThreadPoolBuilder;
 
 use crate::types::{Chunk, ZipAnalysis, Error, Result, ZipHeader};
 
