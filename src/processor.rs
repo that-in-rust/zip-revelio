@@ -1,6 +1,6 @@
 use rayon;
 
-use crate::types::{Chunk, ZipAnalysis, Error, Result, ZipHeader, ZIP_LOCAL_HEADER_SIGNATURE};
+use crate::types::{Chunk, ZipAnalysis, Error, Result, ZipHeader, ZIP_LOCAL_HEADER_SIGNATURE, ZIP_CENTRAL_DIR_SIGNATURE};
 
 /// Processor for parallel ZIP chunk analysis
 pub struct Processor {
@@ -30,43 +30,43 @@ impl Processor {
     /// * `results` - Mutable reference to analysis results
     pub fn process_chunk(&self, chunk: Chunk, results: &mut ZipAnalysis) -> Result<()> {
         self.thread_pool.install(|| {
-            // Basic validation
             if chunk.data().len() < 30 {
-                return Ok(()); // Skip invalid chunks silently
+                return Ok(());
             }
             
-            // Only check signature for first chunk (at offset 0)
             if chunk.offset() == 0 {
                 if &chunk.data()[0..4] != &ZIP_LOCAL_HEADER_SIGNATURE.to_le_bytes() {
-                    return Err(Error::Zip("Invalid ZIP signature".into()));
+                    return Err(Error::Zip(format!(
+                        "Invalid ZIP signature at offset {}", 
+                        chunk.offset()
+                    )));
                 }
             }
 
-            // Parse header and handle results explicitly
             match self.parse_zip_header(chunk.data()) {
                 Some(header) => {
-                    // Update stats
-                    results.add_size(chunk.size());
-                    results.update_compression_method(header.compression_method);
-                    results.update_sizes(header.compressed_size, header.uncompressed_size);
-                    
-                    // Calculate basic compression ratio
-                    let ratio = if header.uncompressed_size > 0 {
-                        1.0 - (header.compressed_size as f64 / header.uncompressed_size as f64)
-                    } else {
-                        0.0
-                    };
-                    results.update_compression(ratio);
-                    results.add_file_type("ZIP".into());
+                    if let Err(e) = self.process_header(header, chunk.size(), results) {
+                        return Err(Error::Processing(format!(
+                            "Failed to process chunk at offset {}: {}", 
+                            chunk.offset(), 
+                            e
+                        )));
+                    }
                     Ok(())
                 },
-                None => Ok(()) // Skip if header parsing fails
+                None => Ok(())
             }
         })
     }
 
     fn parse_zip_header(&self, data: &[u8]) -> Option<ZipHeader> {
         if data.len() < 30 {
+            return None;
+        }
+
+        // Check for central directory signature
+        if &data[0..4] == &ZIP_CENTRAL_DIR_SIGNATURE.to_le_bytes() {
+            // Skip central directory entries
             return None;
         }
 
@@ -109,6 +109,21 @@ impl Processor {
             .build()
             .map(|thread_pool| Self { thread_pool })
             .map_err(|e| Error::Processing(e.to_string()))
+    }
+
+    fn process_header(&self, header: ZipHeader, size: usize, results: &mut ZipAnalysis) -> Result<()> {
+        results.add_size(size);
+        results.update_compression_method(header.compression_method);
+        results.update_sizes(header.compressed_size, header.uncompressed_size);
+        
+        let ratio = if header.uncompressed_size > 0 {
+            1.0 - (header.compressed_size as f64 / header.uncompressed_size as f64)
+        } else {
+            0.0
+        };
+        results.update_compression(ratio);
+        results.add_file_type("ZIP".into());
+        Ok(())
     }
 }
 

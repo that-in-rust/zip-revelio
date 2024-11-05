@@ -800,140 +800,186 @@ cargo test                   # Run tests
        .build()?;
    ```
 
-## Error Prevention Patterns - Updated 📋
+## Error Prevention Patterns - UPDATED 📋
 
-### 1. Constants Usage
+### 1. Arc/RwLock Pattern
 ```rust
 // WRONG ❌
-if &data[0..4] != b"PK\x03\x04" {
-    return Err(Error::Zip("Invalid signature".into()));
+let results_clone = Arc::clone(&results);
+// Use throughout function scope
+Arc::try_unwrap(results)?
+
+// CORRECT ✅
+let results = Arc::new(RwLock::new(ZipAnalysis::new()));
+{
+    let progress_tracker = Arc::clone(&results);
+    // Use in limited scope
+    // Progress tracking code...
+} // progress_tracker dropped here
+Arc::try_unwrap(results)?.into_inner()
+```
+
+### 2. Thread Pool Configuration
+```rust
+// WRONG ❌
+let mut builder = rayon::ThreadPoolBuilder::new();
+if let Some(count) = threads {
+    builder = builder.num_threads(count);
+}
+builder.build()?
+
+// CORRECT ✅
+rayon::ThreadPoolBuilder::new()
+    .num_threads(threads.unwrap_or_else(num_cpus::get))
+    .stack_size(8 * 1024 * 1024)
+    .build()
+    .map(|thread_pool| Self { thread_pool })
+    .map_err(|e| Error::Processing(format!("Thread pool creation failed: {}", e)))
+```
+
+### 3. Error Context Pattern
+```rust
+// WRONG ❌
+.map_err(|e| Error::Io(e.to_string()))?
+
+// CORRECT ✅
+.map_err(|e| Error::Io(format!(
+    "Failed to read metadata for {}: {}", 
+    path.display(), 
+    e
+)))?
+```
+
+### 4. Resource Cleanup Pattern
+```rust
+// WRONG ❌
+impl Drop for ZipReader {
+    fn drop(&mut self) {
+        let _ = self.file.sync_all();  // Sync might fail silently
+    }
 }
 
 // CORRECT ✅
-if &data[0..4] != &ZIP_LOCAL_HEADER_SIGNATURE.to_le_bytes() {
-    return Err(Error::Zip("Invalid signature".into()));
+impl Drop for ZipReader {
+    fn drop(&mut self) {
+        if let Err(e) = futures::executor::block_on(self.file.sync_all()) {
+            eprintln!("Error during file cleanup: {}", e);
+        }
+    }
 }
 ```
 
-### 2. Struct Field Usage
+### 5. Dead Code Handling
 ```rust
 // WRONG ❌
 pub struct ZipHeader {
-    pub unused_field: String,  // Dead code warning
+    pub unused_field: String,  // Warning
 }
 
 // CORRECT ✅
-#[derive(Debug, Clone)]
 pub struct ZipHeader {
-    #[allow(dead_code)]  // Explicitly acknowledge unused
+    #[allow(dead_code)]  // Explicitly document future use
     pub future_field: String,
+}
+```
+
+### 6. Progress Tracking Pattern
+```rust
+// WRONG ❌
+pb.set_position(current_size);  // Raw update
+
+// CORRECT ✅
+let current = progress_tracker.read();
+pb.set_message(format!(
+    "{} files, {:.1}% compressed",
+    current.file_count(),
+    current.get_compression_ratio() * 100.0
+));
+pb.set_position(current.total_size() as u64);
+```
+
+### 7. Validation Pattern
+```rust
+// WRONG ❌
+if metadata.len() > MAX_FILE_SIZE {
+    return Err(Error::Zip("File too large".into()));
+}
+
+// CORRECT ✅
+if metadata.len() > MAX_FILE_SIZE {
+    return Err(Error::Zip(format!(
+        "File {} is too large ({} bytes > 4GB)", 
+        path.display(), 
+        metadata.len()
+    )));
+}
+```
+
+### 8. Stream Implementation Pattern
+```rust
+// WRONG ❌
+fn stream_chunks(&mut self) -> impl Stream<Item = Result<Chunk>> {
+    // Missing lifetime bound
+}
+
+// CORRECT ✅
+fn stream_chunks(&mut self) -> impl Stream<Item = Result<Chunk>> + '_ {
+    let chunk_size = self.chunk_size;  // Cache before borrow
+    ChunkStream {
+        reader: self,
+        buffer: vec![0; chunk_size],
+    }
+}
+```
+
+## Testing Requirements - UPDATED 🧪
+
+1. Resource Management Tests:
+```rust
+#[tokio::test]
+async fn test_resource_cleanup() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("test.zip");
+    {
+        let reader = ZipReader::new(path.clone()).await.unwrap();
+        // Reader dropped here, should cleanup
+    }
+    // Verify cleanup
+}
+```
+
+2. Thread Safety Tests:
+```rust
+#[test]
+fn test_concurrent_processing() {
+    let processor = Processor::new().unwrap();
+    let data = Arc::new(vec![/* test data */]);
+    let results = Arc::new(RwLock::new(ZipAnalysis::new()));
     
-    // OR remove if truly unused
-    // pub unused_field: String,
+    let handles: Vec<_> = (0..4).map(|_| {
+        let data = Arc::clone(&data);
+        let results = Arc::clone(&results);
+        std::thread::spawn(move || {
+            // Test concurrent access
+        })
+    }).collect();
+    
+    for handle in handles {
+        handle.join().unwrap();
+    }
 }
 ```
 
-### 3. Constructor Pattern
+3. Error Handling Tests:
 ```rust
-// WRONG ❌
-fn main() {
-    let processor = Processor::new_with_threads(None);  // Bypassing standard constructor
-}
-
-// CORRECT ✅
-fn main() {
-    let processor = Processor::new()?;  // Use standard constructor
-    // OR
-    let processor = Processor::new_with_threads(Some(4))?;  // Explicit about custom needs
-}
-```
-
-### 4. Error Propagation
-```rust
-// WRONG ❌
-fn process_all(&self) -> Result<()> {
-    self.results.unwrap()?;  // Direct unwrap
-}
-
-// CORRECT ✅
-fn process_all(&self) -> Result<()> {
-    let results = self.results
-        .ok_or_else(|| Error::Processing("No results available".into()))?;
-    Ok(())
-}
-```
-
-## Implementation Checklist - Updated ✅
-
-1. Constants:
-   - [ ] Use defined constants instead of magic values
-   - [ ] Convert constants to proper byte representation
-   - [ ] Document constant usage in comments
-
-2. Struct Fields:
-   - [ ] Review all struct fields for usage
-   - [ ] Either use or explicitly mark as future use
-   - [ ] Remove truly unused fields
-   - [ ] Document field purpose
-
-3. Constructors:
-   - [ ] Implement and use standard constructors
-   - [ ] Document when to use specialized constructors
-   - [ ] Add validation in constructors
-   - [ ] Test constructor error cases
-
-4. Error Handling:
-   - [ ] No direct unwraps in production code
-   - [ ] Proper error context in messages
-   - [ ] Complete error propagation chain
-   - [ ] Test error scenarios
-
-## Testing Requirements - Updated 🧪
-
-1. Constants:
-```rust
-#[test]
-fn test_signature_validation() {
-    assert_eq!(
-        &ZIP_LOCAL_HEADER_SIGNATURE.to_le_bytes(),
-        b"PK\x03\x04"
-    );
-}
-```
-
-2. Struct Usage:
-```rust
-#[test]
-fn test_header_fields() {
-    let header = ZipHeader::new(
-        STORED,
-        100,
-        100,
-        "test.txt".into(),
-        false,
-        0
-    );
-    assert_eq!(header.compression_method, STORED);
-}
-```
-
-3. Constructor Tests:
-```rust
-#[test]
-fn test_processor_creation() {
-    assert!(Processor::new().is_ok());
-    assert!(Processor::new_with_threads(Some(1)).is_ok());
-}
-```
-
-4. Error Handling:
-```rust
-#[test]
-fn test_error_propagation() {
-    let result = process_invalid_data();
-    assert!(matches!(
-        result,
-        Err(Error::Processing(_))
-    ));
+#[tokio::test]
+async fn test_error_propagation() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("invalid.zip");
+    
+    std::fs::write(&path, b"not a zip file").unwrap();
+    
+    let result = ZipReader::new(path).await;
+    assert!(matches!(result, Err(Error::Zip(_))));
 }
 ```

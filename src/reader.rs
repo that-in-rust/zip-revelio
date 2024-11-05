@@ -65,8 +65,9 @@ impl ZipReader {
 
 impl Drop for ZipReader {
     fn drop(&mut self) {
-        // Ensure file handle is properly closed and synced
-        let _ = futures::executor::block_on(self.file.sync_all());
+        if let Err(e) = futures::executor::block_on(self.file.sync_all()) {
+            eprintln!("Error during file cleanup at position {}: {}", self.position, e);
+        }
     }
 }
 

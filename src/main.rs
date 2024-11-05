@@ -131,41 +131,41 @@ async fn process_zip(
     
     // Initialize with proper error handling
     let mut reader = ZipReader::new(path).await?;
-    let processor = Processor::new()
+    let processor = Processor::new_with_threads(_threads)
         .map_err(|e| Error::Processing(format!("Failed to create processor: {}", e)))?;
     
     let results = Arc::new(RwLock::new(ZipAnalysis::new()));
-    let progress_tracker = Arc::clone(&results);
     
-    let mut stream = reader.stream_chunks();
-    while let Some(chunk_result) = stream.next().await {
-        // Check cancellation first
-        if !running.load(Ordering::SeqCst) {
-            pb.finish_with_message("Analysis cancelled");
-            return Err(Error::Processing("Operation cancelled".into()));
+    // Scope the progress tracker
+    {
+        let progress_tracker = Arc::clone(&results);
+        let mut stream = reader.stream_chunks();
+        
+        while let Some(chunk_result) = stream.next().await {
+            if !running.load(Ordering::SeqCst) {
+                pb.finish_with_message("Analysis cancelled");
+                return Err(Error::Processing("Operation cancelled".into()));
+            }
+
+            let chunk = chunk_result?;
+            processor.process_chunk(chunk, &mut *results.write())
+                .map_err(|e| Error::Processing(format!("Chunk processing failed: {}", e)))?;
+
+            // Progress updates using progress_tracker
+            let current = progress_tracker.read();
+            pb.set_message(format!(
+                "{} files, {:.1}% compressed",
+                current.file_count(),
+                current.get_compression_ratio() * 100.0
+            ));
+            pb.set_position(current.total_size() as u64);
         }
+    } // progress_tracker is dropped here
 
-        // Handle chunk with proper error propagation
-        let chunk = chunk_result?;
-        processor.process_chunk(chunk, &mut *results.write())
-            .map_err(|e| Error::Processing(format!("Chunk processing failed: {}", e)))?;
-
-        // Update progress
-        let current = progress_tracker.read();
-        pb.set_message(format!(
-            "{} files, {:.1}% compressed",
-            current.file_count(),
-            current.get_compression_ratio() * 100.0
-        ));
-        pb.set_position(current.total_size() as u64);
-    }
-
-    // Explicit drop of clone before unwrap
-    drop(progress_tracker);
-    
-    Arc::try_unwrap(results)
-        .expect("All references should be dropped")
-        .into_inner()
+    // Now we can safely unwrap results
+    Ok(Arc::try_unwrap(results)
+        .map_err(|_| Error::Processing("Failed to collect results - active references remain".into()))?
+        .into_inner())
 }
 
 #[tokio::main]
