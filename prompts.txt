@@ -1,0 +1,10 @@
+I want you to ELI15 explain visually in the style of @visualASCII202410.txt  in @prd.txt  why you took the module design that you thought of
+
+Do not touch Section
+
+Start from Section 2
+
+Explain your thought process, data flow, information flow, whatever that is with your 300 IQ
+
+
+
