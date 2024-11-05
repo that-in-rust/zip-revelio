@@ -368,3 +368,104 @@ fn test_ownership_patterns() {
     // Test lifetime constraints
     // Test mutability requirements
 }
+```
+
+## Stream Implementation Patterns 🔍
+1. Lifetime Management:
+   ```rust
+   // WRONG ❌
+   pub fn stream_chunks(&mut self) -> impl Stream<Item = Result<Chunk>> {
+       ChunkStream { reader: self, ... }
+   }
+
+   // CORRECT ✅
+   pub fn stream_chunks(&mut self) -> impl Stream<Item = Result<Chunk>> + '_ {
+       let chunk_size = self.chunk_size;  // Get size before borrow
+       ChunkStream {
+           reader: self,
+           buffer: vec![0; chunk_size],
+       }
+   }
+   ```
+
+2. Import Guidelines:
+   ```rust
+   // WRONG ❌
+   use futures::Future;  // Don't import traits not directly used
+   use rayon::ThreadPoolBuilder;  // Don't import if using through thread_pool
+
+   // CORRECT ✅
+   use futures::StreamExt;  // Only import what's used
+   use rayon::ThreadPool;   // Direct type usage
+   ```
+
+3. Borrowing Rules:
+   ```rust
+   // WRONG ❌
+   buffer: vec![0; self.chunk_size],  // Uses self after borrow
+
+   // CORRECT ✅
+   let size = self.chunk_size;        // Cache before borrow
+   buffer: vec![0; size],             // Use cached value
+   ```
+
+## Error Prevention Patterns 📋
+1. Lifetime Annotations:
+   ```rust
+   // Always be explicit with lifetimes in streams
+   pub fn stream_chunks(&mut self) -> impl Stream<Item = Result<Chunk>> + '_ {
+       // Implementation
+   }
+   ```
+
+2. Borrow Checker Rules:
+   ```rust
+   // Get all values needed before borrowing
+   let config = self.get_config();
+   let size = self.get_size();
+   
+   // Then create structures using borrowed self
+   StructWithBorrow {
+       item: self,
+       config,
+       buffer: vec![0; size],
+   }
+   ```
+
+3. Import Management:
+   ```rust
+   // Group imports by purpose
+   // Standard library
+   use std::sync::Arc;
+   
+   // External crates - only what's used
+   use futures::StreamExt;
+   use rayon::ThreadPool;
+   
+   // Internal modules
+   use crate::types::Result;
+   ```
+
+## Implementation Checklist ✅
+Add:
+- [ ] Verify lifetime annotations on streams
+- [ ] Check borrow checker patterns
+- [ ] Validate import usage
+- [ ] Test with clippy warnings as errors
+
+## Common Pitfalls 🚫
+Add:
+1. Stream Lifetime Issues:
+   - Missing lifetime bounds
+   - Hidden type captures
+   - Improper borrow patterns
+
+2. Import Issues:
+   - Unused trait imports
+   - Over-generic imports
+   - Missing direct type imports
+
+3. Borrow Checker:
+   - Using self after borrow
+   - Not caching needed values
+   - Complex borrowing patterns

@@ -9,7 +9,6 @@ use clap::Parser;
 use indicatif::{ProgressBar, ProgressStyle, HumanBytes};
 use parking_lot::RwLock;
 use futures::StreamExt;
-use futures::Future;
 
 mod types;
 mod reader;

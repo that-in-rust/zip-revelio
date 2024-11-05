@@ -49,10 +49,11 @@ impl ZipReader {
     }
     
     /// Stream chunks from the ZIP file
-    pub fn stream_chunks(&mut self) -> impl Stream<Item = Result<Chunk>> {
+    pub fn stream_chunks(&mut self) -> impl Stream<Item = Result<Chunk>> + '_ {
+        let chunk_size = self.chunk_size;  // Cache before borrow
         ChunkStream {
             reader: self,
-            buffer: vec![0; self.chunk_size],
+            buffer: vec![0; chunk_size],  // Use cached size
         }
     }
     
