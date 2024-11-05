@@ -1,225 +1,268 @@
 # ZIP Analyzer Architecture 🏗️
 
-"Hey, ever wonder how Netflix streams movies without downloading the whole thing first? That's exactly how we're handling huge ZIP files - we process them piece by piece instead of loading everything at once!"
+"Hey, ever notice how Netflix lets you watch a movie instantly? It streams small chunks instead of downloading the whole thing. That's exactly what we're doing with ZIP files!"
 
-## 1. High-Level Overview 🎯
-"Think of it like a sandwich assembly line - the ZIP file is our ingredients (Input), we have workers preparing different parts (Processing), and finally we get our finished sandwich (Report)!"
+"Instead of loading a huge 10GB ZIP file at once, we process it piece by piece - just like streaming a movie!"
 
-```
-Input ZIP    →    Processing Pipeline    →    Analysis Report
-   📦             🔄 Streaming              📊 Stats & Info
-   │              🧵 Parallel                        │
-10GB+ ZIP    →    Memory Efficient          →    output.txt
-```
-
-## 2. Core Components 🧩
-"It's like a restaurant kitchen - you've got people receiving ingredients (zip_reader), chefs cooking (processor), and servers delivering food (reporter)!"
+## 1. Core Architecture 🎯
+"Think of it like a pizza delivery system - the ZIP file is the order (Input), our kitchen has multiple chefs working together (Processing), and the delivered pizza is our report (Output)!"
 
 ```
-                    main.rs (Head Chef)
-                          │
-        ┌─────────────────┼─────────────────┐
-        ▼                 ▼                 ▼
-    zip_reader/      processor/         reporter/
-    (Receiver 📥)   (Cook ⚡)        (Server 📝)
+Input ZIP    →    Parallel Processing    →    Analysis Report
+   📦        →    [tokio + rayon]       →    📊 Stats
+   │              ┌─────────────┐            │
+   └─────────────►│🧵🧵🧵🧵🧵│────────────►│
+                  └─────────────┘            ▼
+                  Worker Threads          Results
 ```
 
-## 3. Data Flow Pipeline 🔄
-"Imagine you're making TikTok videos - first you record (Input), then edit in chunks (Processing), and finally publish (Output). We're doing the same with ZIP files!"
+## 2. Module Structure 📁
+"Like organizing your backpack for school - each pocket has a specific purpose. Our code is organized the same way!"
 
-```
-[Input Phase]     [Processing Phase]     [Output Phase]
-ZIP Stream    →    Chunk Queue      →     Results
-   │               │    │                    │
-   ▼               ▼    ▼                    ▼
-Read Headers → Split → Process → Aggregate → Write
-   📥             🔄     ⚡         📊        📝
-
-Memory Usage:
-└─ ~100MB per chunk (like one video clip)
-   └─ 10 chunks max (your editing timeline)
-      └─ ~1GB peak memory (final render buffer)
-```
-
-## 4. Parallel Processing Model ⚡
-"Think of it like multiple YouTube video processors working on different parts of the same video simultaneously - each worker handles their chunk, then combines everything at the end!"
-
-```
-                    Chunk Queue
-                        │
-           ┌───────────┴───────────┐
-           ▼           ▼           ▼
-      Worker 🧵    Worker 🧵    Worker 🧵
-           │           │           │
-           └───────────┴───────────┘
-                        │
-                    Results Queue
+```rust
+src/
+├── main.rs          # Entry + CLI (like the backpack zipper!)
+│   ├── args         # Command line options
+│   └── run         # Main program flow
+│
+├── reader.rs        # Async ZIP streaming (tokio)
+│   ├── stream      # Read ZIP chunks  📥
+│   └── buffer      # Manage memory   💾
+│
+├── processor.rs     # Parallel analysis (rayon)
+│   ├── worker      # Process chunks  ⚡
+│   └── stats       # Collect data   📊
+│
+└── types.rs         # Core types (shared tools)
+    ├── chunk       # Data chunks    📦
+    └── result      # Analysis data  📋
 ```
 
-## 5. Key Dependencies 📦
-"Just like a gaming PC needs specific parts (CPU, GPU, RAM), our program needs specific tools. Here's our parts list!"
+## 3. Data Flow 🔄
+"Imagine a fast-food restaurant during rush hour. Orders (chunks) come in, multiple cooks (workers) prepare them in parallel, and completed orders (results) go out!"
 
 ```
-Core Processing         Error Handling        CLI/Progress
-┌──────────────┐       ┌──────────┐         ┌──────────┐
-│ tokio   🚀   │       │anyhow  ❌│         │clap   💻│
-│ rayon   ⚡   │       │tracing 📝│         │indie  📊│
-│ zip-rs  📦   │       └──────────┘         └──────────┘
-└──────────────┘
-
-Memory Management      Performance
-┌──────────────┐      ┌──────────┐
-│ bytes   📎   │      │mmap   💾│
-│ memmap  💾   │      │xbeam  🔄│
-└──────────────┘      └──────────┘
-```
-
-## 6. Error Recovery Strategy 🔁
-"It's like catching a ball - if you miss (error), you either try again (recoverable) or let it go and keep playing (non-recoverable)!"
-
-```
-Error Detected
+ZIP File Stream (like a conveyor belt)
+     │
+     ▼
+┌────────────┐
+│ Read Chunk │◄──── tokio async I/O
+└─────┬──────┘
       │
       ▼
-Is Recoverable?
-  │         │
-  Yes       No
-  │         │
-Retry     Log & Skip
-  │         │
-  └────┬────┘
-       │
-   Continue
+┌─────────────────┐
+│   Chunk Queue   │◄──── crossbeam channels
+└─────────┬───────┘
+          │
+    ┌─────┴─────┐
+    ▼     ▼     ▼
+┌─────┐ ┌─────┐ ┌─────┐
+│Work1│ │Work2│ │Work3│◄──── rayon parallel
+└──┬──┘ └──┬──┘ └──┬──┘
+   │       │       │
+   └───────┴───────┘
+          │
+          ▼
+    Final Results
 ```
 
-## 7. Memory Management Strategy 💾
-"Think of RAM like your desk space - you need enough room to work (chunks) but can't use the whole desk (system RAM) at once!"
+## 4. Performance Targets 🎯
+"Like a race car's speedometer - these are our speed goals!"
 
 ```
-Available System RAM
+Performance Dashboard
 ┌────────────────────────┐
-│ App Limit (80%)        │
-│ ┌──────────────────┐   │
-│ │ Active Chunks    │   │
-│ │ ┌────┐ ┌────┐   │   │
-│ │ │100M│ │100M│   │   │
-│ │ └────┘ └────┘   │   │
-│ └──────────────────┘   │
+│  🏃 Speed: 100MB/s    │ "As fast as downloading a movie!"
+│  💾 Memory: ~8MB/thread│ "Like having multiple small work tables"
+│  📦 Chunks: 256KB     │ "Perfect bite-sized pieces"
+│  🧵 Threads: Auto     │ "Uses all available CPU power"
 └────────────────────────┘
 ```
 
-## 8. Progress Tracking 📊
-"Like a YouTube video progress bar - shows how much is done, how fast it's going, and how long until it's finished!"
+## 5. Dependencies 📦
+"Like choosing the right tools for a job - each crate has a specific purpose!"
 
 ```
-[===========>           ] 45%
-Speed: 100MB/s | ETA: 2m 30s
-Files: 1,234 | Errors: 0
+Tool Belt
+┌─────────────┐
+│ tokio   🚀  │──► "The traffic controller for data"
+│ rayon   ⚡  │──► "The team manager for workers"
+│ zip     📦  │──► "The package inspector"
+│ crossbeam 🔄 │──► "The message delivery system"
+│ clap    💻  │──► "The friendly receptionist"
+│ indicatif📊 │──► "The progress tracker"
+└─────────────┘
 ```
 
-## 9. Performance Optimizations 🚀
-"Just like optimizing a game - some tricks make it faster (Speed Boosters), others make it use less memory (Memory Savers)!"
+## 6. Advanced Features ⚡
+"Like a car's dashboard - showing all the important stats while you drive!"
 
 ```
-Speed Boosters              Memory Savers
-┌─────────────────┐        ┌─────────────────┐
-│ Parallel Decomp │        │ Chunk Streaming │
-│ Memory Mapping  │        │ Buffer Pooling  │
-│ Worker Threads  │        │ Early Cleanup   │
-└─────────────────┘        └─────────────────┘
+Stats Dashboard (collected in parallel)
+┌─────────────────────────────┐
+│ 📊 Compression: 75%        │ "How well files are squeezed"
+│ 📁 Types: [PDF, JPG, DOC]  │ "What kinds of files we found"
+│ 💾 Memory: 120MB Used      │ "How much RAM we're using"
+│ ⚡ Speed: 150MB/s          │ "How fast we're processing"
+└─────────────────────────────┘
 ```
 
-## 10. Safety Measures 🔒
-"Like a three-step security check at an airport - we check everything at entry, during processing, and before exit!"
+## 7. Rust Implementation Patterns 🦀
+"Think of this like a detailed blueprint showing how all our Rust pieces work together!"
+
+### 7.1 Ownership Flow 📦
+"Like passing a baton in a relay race - data moves between components!"
 
 ```
-Input Validation  →  Processing Guards  →  Output Checks
-     │                     │                    │
-   Size ✓              Memory ✓             Format ✓
-   Type ✓              Timeout ✓            Write ✓
-   Access ✓            Errors ✓             Flush ✓
+                 ownership moves →
+┌──────────┐    ┌──────────┐    ┌──────────┐
+│  Reader  │───►│Processor │───►│ Results  │
+└──────────┘    └──────────┘    └──────────┘
+     │               │               │
+     └───&mut───┘    └────&────┘    
+    borrows for       immutable
+     writing          references
+
+Example:
+let chunk = reader.read_chunk()?;  // Reader owns chunk
+processor.process(chunk);          // Ownership moves to processor
+results.push(chunk.results);      // Final ownership in results
 ```
 
-## 11. Development Workflow 🔧
-"Similar to making a YouTube video - record (code), edit (test), review, then publish (merge)!"
+### 7.2 Async/Await Pattern 🔄
+"Like a restaurant kitchen with order tickets and callbacks!"
 
 ```
-Feature Branch → Tests → CI/CD → Review → Merge
-     │            │       │        │        │
-   Code ✍️      Run ✅   Build 🏗️  Check 👀  Ship 🚀
+async fn process_zip() {
+    ┌─────────────┐
+    │ Main Thread │
+    └──────┬──────┘
+           │ spawn_blocking
+    ┌──────▼──────┐
+    │ ZIP Reader  │──┐ .await
+    └──────┬──────┘  │
+           │ yield   │
+    ┌──────▼──────┐  │
+    │ Other Tasks │  │
+    └──────┬──────┘  │
+           │ resume  │
+    ┌──────▼──────┐◄─┘
+    │   Results   │
+    └─────────────┘
 ```
 
-## 12. Testing Strategy 🧪
-"Like testing a new game - first test individual features (Unit), then full gameplay (Integration), then performance (Benchmarks)!"
+### 7.3 Thread Safety 🔒
+"Like multiple chefs sharing kitchen tools safely!"
 
 ```
-Unit Tests        Integration Tests     Performance Tests
-┌──────────┐     ┌──────────────┐     ┌──────────────┐
-│Functions │     │End-to-End    │     │Benchmarks    │
-│Modules   │     │Real Files    │     │Memory Usage  │
-│Utils     │     │Error Cases   │     │Speed Metrics │
-└──────────┘     └──────────────┘     └──────────────┘
+                 Arc<Mutex<Queue>>
+┌──────────┐     ┌──────────┐     ┌──────────┐
+│ Thread 1 │────►│  Shared  │◄────│ Thread 2 │
+└──────────┘     │   Data   │     └──────────┘
+                 └──────────┘
+                      ▲
+                      │
+                 ┌──────────┐
+                 │ Thread 3 │
+                 └──────────┘
+
+Example:
+let queue = Arc::new(Mutex::new(Vec::new()));
+let queue_clone = Arc::clone(&queue);  // Reference counting
+queue_clone.lock()?.push(item);       // Safe mutation
 ```
 
-## 13. Cargo Dependencies 📦
-"Think of this as our shopping list - we're getting specific tools from the Rust store (crates.io) to build our program!"
-
-```toml
-[package]
-name = "zip-analyzer"
-version = "0.1.0"
-edition = "2021"
-
-[dependencies]
-# Core Processing
-tokio = { version = "1.36", features = ["full"] }  # Async runtime 🚀
-rayon = "1.8"                                      # Parallel processing ⚡
-zip = "0.6"                                        # ZIP handling 📦
-
-# Error Handling
-thiserror = "1.0"                                 # Error definitions ❌
-anyhow = "1.0"                                    # Error propagation 🔄
-tracing = "0.1"                                   # Logging system 📝
-tracing-subscriber = "0.3"                        # Logging setup 🔍
-
-# CLI & Progress
-clap = { version = "4.5", features = ["derive"] } # CLI arguments 💻
-indicatif = "0.17"                                # Progress bars 📊
-console = "0.15"                                  # Terminal utilities 🖥️
-
-# Memory & Performance
-bytes = "1.5"                                     # Byte operations 📎
-memmap2 = "0.9"                                   # Memory mapping 💾
-crossbeam = "0.8"                                 # Thread primitives 🔄
-
-# Serialization & Data
-serde = { version = "1.0", features = ["derive"] } # Data serialization 📋
-serde_json = "1.0"                                 # JSON handling 📄
-chrono = { version = "0.4", features = ["serde"] } # Time utilities ⏰
-
-[dev-dependencies]
-criterion = "0.5"                                  # Benchmarking 📊
-mockall = "0.12"                                  # Mocking for tests 🔧
-tempfile = "3.8"                                  # Temp files for tests 📁
-
-[features]
-default = ["standard"]
-standard = ["progress-bars", "json-output"]
-full = ["standard", "advanced-stats", "memory-analysis"]
-
-# Optional features
-progress-bars = ["indicatif"]
-json-output = ["serde_json"]
-advanced-stats = []
-memory-analysis = []
-```
-
-### Key Feature Groups 🎯
+### 7.4 Error Propagation ❌
+"Like a game of hot potato with error handling!"
 
 ```
-Standard Features       Full Features          Dev Features
-┌────────────────┐    ┌────────────────┐    ┌────────────────┐
-│Progress Bars   │    │Advanced Stats  │    │Benchmarking    │
-│JSON Output     │    │Memory Analysis │    │Test Utilities  │
-└────────────────┘    └────────────────┘    └────────────────┘
+Result<Analysis, Error>
+     ┌───────────┐
+     │   main    │
+     └─────┬─────┘
+           │ ?
+    ┌──────▼─────┐
+    │   reader   │
+    └──────┬─────┘
+           │ ?
+    ┌──────▼─────┐
+    │ processor  │
+    └──────┬─────┘
+           │ ?
+    ┌──────▼─────┐
+    │  results   │
+    └───────────┘
+
+Example:
+async fn process() -> Result<(), Error> {
+    let data = read_file().await?;    // Error propagates up
+    process_data(data)?;              // Chain of ? operators
+    save_results()?;                  // Unified error handling
+    Ok(())
+}
 ```
+
+### 7.5 Memory Management 💾
+"Like organizing a warehouse with automatic cleanup!"
+
+```
+Scope-Based Cleanup:
+┌─────────────────────┐
+│ fn process() {      │
+│   let data = Data   │──┐
+│   process(data)     │  │
+│ } // Drop here      │◄─┘
+└─────────────────────┘
+
+Buffer Management:
+┌──────────┐
+│ Buffer 1 │◄─┐
+└──────────┘  │    ┌─────────────┐
+              ├────│ Buffer Pool  │
+┌──────────┐  │    └─────────────┘
+│ Buffer 2 │◄─┘
+└──────────┘
+```
+
+### 7.6 Data Flow Control 🔄
+"Like traffic lights controlling data flow!"
+
+```
+                 Backpressure
+┌──────────┐     Control     ┌──────────┐
+│ Producer │◄───────┐        │Consumer  │
+└────┬─────┘        │        └────┬─────┘
+     │         ┌────┴─────┐       │
+     └────────►│ Channel  │◄──────┘
+              └──────────┘
+              Bounded Queue
+
+Example:
+let (tx, rx) = channel(32);  // Bounded channel
+tx.send(chunk).await?;       // Backpressure
+rx.recv().await?;            // Flow control
+```
+
+=== Change Log ===
+Removed:
+- Complex error handling
+- Multiple output formats
+- Feature flags
+- Development workflow
+- Testing strategy
+- Extra dependencies
+- Utils module
+- Writer module
+
+Simplified:
+- Module structure (4 files total)
+- Dependencies (6 core crates)
+- Error handling (basic Result)
+- Progress tracking (single bar)
+
+Focus Areas:
++ Tokio async streaming
++ Rayon parallel processing
++ Memory-efficient chunks
++ Thread coordination
++ Performance optimization
