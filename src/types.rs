@@ -1,8 +1,10 @@
 pub const ZIP_LOCAL_HEADER_SIGNATURE: u32 = 0x04034b50;
 pub const ZIP_CENTRAL_DIR_SIGNATURE: u32 = 0x02014b50;
-pub const MAX_FILE_SIZE: u64 = 0xFFFFFFFF;  // 4GB limit
+pub const ZIP_END_CENTRAL_DIR_SIGNATURE: u32 = 0x06054b50;
 pub const STORED: u16 = 0;
 pub const DEFLATED: u16 = 8;
+pub const MIN_EOCD_SIZE: u32 = 22;          // Minimum EOCD record size
+pub const MAX_COMMENT_SIZE: u16 = 0xFFFF;    // 64KB max comment
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -51,6 +53,7 @@ pub struct ZipAnalysis {
     total_compressed: u64,
     total_uncompressed: u64,
     file_count: usize,
+    file_paths: RwLock<Vec<String>>,
 }
 
 impl ZipAnalysis {
@@ -115,6 +118,16 @@ impl ZipAnalysis {
     pub fn total_uncompressed(&self) -> u64 {
         self.total_uncompressed
     }
+
+    pub fn add_file_path(&self, path: String) {
+        let mut paths = self.file_paths.write();
+        paths.push(path);
+    }
+
+    pub fn get_file_paths(&self) -> Vec<String> {
+        let paths = self.file_paths.read();
+        paths.clone()
+    }
 }
 
 #[derive(Debug, Error)]
@@ -130,43 +143,3 @@ pub enum Error {
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
-
-// Cache-aligned chunk
-#[repr(C, align(64))]
-pub struct Chunk {
-    data: Vec<u8>,
-    offset: u64,
-    size: usize,
-}
-
-impl Chunk {
-    pub fn new(data: Vec<u8>, offset: u64) -> Self {
-        let size = data.len();
-        Self { data, offset, size }
-    }
-
-    pub fn data(&self) -> &[u8] {
-        &self.data
-    }
-
-    pub fn offset(&self) -> u64 {
-        self.offset
-    }
-
-    pub fn size(&self) -> usize {
-        self.size
-    }
-}
-
-// Add From implementations for Error
-impl From<std::io::Error> for Error {
-    fn from(e: std::io::Error) -> Self {
-        Error::Io(e.to_string())
-    }
-}
-
-impl From<ctrlc::Error> for Error {
-    fn from(e: ctrlc::Error) -> Self {
-        Error::Processing(e.to_string())
-    }
-}

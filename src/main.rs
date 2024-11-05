@@ -12,11 +12,9 @@ use futures::StreamExt;
 
 mod types;
 mod reader;
-mod processor;
 
 use crate::types::{Result, Error, ZipAnalysis, STORED, DEFLATED};
 use crate::reader::ZipReader;
-use crate::processor::Processor;
 
 /// ZIP file analyzer with parallel processing
 #[derive(Parser, Debug)]
@@ -67,11 +65,10 @@ fn setup_progress_bar(total_size: u64) -> ProgressBar {
     let pb = ProgressBar::new(total_size);
     pb.set_style(
         ProgressStyle::default_bar()
-            .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {bytes}/{total_bytes} ({eta}) [{msg}]")
+            .template("{bytes}/{total_bytes} [{bar:40}] {percent}% {msg}")
             .unwrap()
             .progress_chars("=>-")
     );
-    pb.enable_steady_tick(Duration::from_millis(100));
     pb
 }
 
@@ -112,6 +109,14 @@ fn format_results(analysis: &ZipAnalysis, elapsed: std::time::Duration) -> Strin
         output.push_str(&format!("  {}: {}\n", method_name, count));
     }
     
+    // Add sorted file list
+    output.push_str("\nFiles (sorted alphabetically):\n");
+    let mut files = analysis.get_file_paths();
+    files.sort();
+    for file in files {
+        output.push_str(&format!("{}\n", file));
+    }
+    
     output
 }
 
@@ -122,50 +127,12 @@ async fn process_zip(
     running: Arc<AtomicBool>,
     _threads: Option<usize>,
 ) -> Result<ZipAnalysis> {
-    // Validate input
-    if !path.exists() {
-        return Err(Error::Io("Input file does not exist".into()));
-    }
-
-    let _start_time = Instant::now();
+    let mut reader = ZipReader::new(path, pb).await?;
+    let mut results = ZipAnalysis::new();
     
-    // Initialize with proper error handling
-    let mut reader = ZipReader::new(path).await?;
-    let processor = Processor::new_with_threads(_threads)
-        .map_err(|e| Error::Processing(format!("Failed to create processor: {}", e)))?;
+    reader.analyze(&mut results).await?;
     
-    let results = Arc::new(RwLock::new(ZipAnalysis::new()));
-    
-    // Scope the progress tracker
-    {
-        let progress_tracker = Arc::clone(&results);
-        let mut stream = reader.stream_chunks();
-        
-        while let Some(chunk_result) = stream.next().await {
-            if !running.load(Ordering::SeqCst) {
-                pb.finish_with_message("Analysis cancelled");
-                return Err(Error::Processing("Operation cancelled".into()));
-            }
-
-            let chunk = chunk_result?;
-            processor.process_chunk(chunk, &mut *results.write())
-                .map_err(|e| Error::Processing(format!("Chunk processing failed: {}", e)))?;
-
-            // Progress updates using progress_tracker
-            let current = progress_tracker.read();
-            pb.set_message(format!(
-                "{} files, {:.1}% compressed",
-                current.file_count(),
-                current.get_compression_ratio() * 100.0
-            ));
-            pb.set_position(current.total_size() as u64);
-        }
-    } // progress_tracker is dropped here
-
-    // Now we can safely unwrap results
-    Ok(Arc::try_unwrap(results)
-        .map_err(|_| Error::Processing("Failed to collect results - active references remain".into()))?
-        .into_inner())
+    Ok(results)
 }
 
 #[tokio::main]

@@ -7,10 +7,10 @@ Core Requirements 🎯
 3. Outputs analysis to a text file
 4. Shows progress bar during analysis
 5. Handles ZIP files efficiently:
-   - Minimum chunk size: 4MB (fixed)
-   - Maximum file size: 4GB (ZIP32 format limitation)
-   - Skips non-ASCII filenames
-   - Supports only Store/Deflate compression
+   - Fixed 4MB chunks for optimal performance
+   - Supports both ZIP32 and ZIP64 formats
+   - Skips non-ASCII filenames (for compatibility)
+   - Supports Store/Deflate compression methods
 6. Provides detailed file statistics and compression info
 7. Maintains memory efficiency through fixed 4MB chunks
 8. Graceful error handling
@@ -46,13 +46,9 @@ Files (sorted alphabetically):
 
 e.g.
 1.
-cargo run -- /home/amuldotexe/Downloads/node-main.zip /home/amuldotexe/Downloads/node-main-20241105.txt
+cargo run -- /home/amuldotexe/Downloads/node-main.zip /home/amuldotexe/Downloads/node-main-20241105v2.txt
 
 Constraints:
-- Traditional ZIP format only (not ZIP64):
-  - Max single file size: 4GB
-  - Max archive size: 4GB
-  - Max number of files: 65,535
-- ASCII filenames only
-- Store/Deflate compression only
-- Fixed 4MB chunk size
+- ASCII filenames only (for compatibility)
+- Store/Deflate compression only (most common methods)
+- Fixed 4MB chunk size (for performance)

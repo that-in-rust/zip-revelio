@@ -1,268 +1,109 @@
 # ZIP Analyzer Architecture 🏗️
 
-"Hey, ever notice how Netflix lets you watch a movie instantly? It streams small chunks instead of downloading the whole thing. That's exactly what we're doing with ZIP files!"
-
-"Instead of loading a huge 10GB ZIP file at once, we process it piece by piece - just like streaming a movie!"
+"ZIP files are read from the end - this is fundamental to the format. The Central Directory at the end contains the true file list and locations."
 
 ## 1. Core Architecture 🎯
-"Think of it like a pizza delivery system - the ZIP file is the order (Input), our kitchen has multiple chefs working together (Processing), and the delivered pizza is our report (Output)!"
-
 ```
-Input ZIP    →    Parallel Processing    →    Analysis Report
-   📦        →    [tokio + rayon]       →    📊 Stats
-   │              ┌─────────────┐            │
-   └─────────────►│🧵🧵🧵🧵🧵│────────────►│
-                  └─────────────┘            ▼
-                  Worker Threads          Results
+Input ZIP    →    Find CD     →    Process CD    →    Report
+   📦        →    [End Scan]  →    [Entries]     →    📊
+   │              ┌─────────┐      ┌─────────┐        │
+   └─────────────►│ EOCD    ├─────►│ CD      ├───────►│
+                  └─────────┘      └─────────┘        ▼
+                  Last 64KB     Central Directory  Results
 ```
 
 ## 2. Module Structure 📁
-"Like organizing your backpack for school - each pocket has a specific purpose. Our code is organized the same way!"
-
 ```rust
 src/
-├── main.rs          # Entry + CLI (like the backpack zipper!)
-│   ├── args         # Command line options
-│   └── run         # Main program flow
-│
-├── reader.rs        # Async ZIP streaming (tokio)
-│   ├── stream      # Read ZIP chunks  📥
-│   └── buffer      # Manage memory   💾
-│
-├── processor.rs     # Parallel analysis (rayon)
-│   ├── worker      # Process chunks  ⚡
-│   └── stats       # Collect data   📊
-│
-└── types.rs         # Core types (shared tools)
-    ├── chunk       # Data chunks    📦
-    └── result      # Analysis data  📋
+├── main.rs       # CLI and orchestration
+├── reader.rs     # ZIP end scanning & CD reading
+├── processor.rs  # Central Directory processing
+└── types.rs      # ZIP format constants & types
 ```
 
 ## 3. Data Flow 🔄
-"Imagine a fast-food restaurant during rush hour. Orders (chunks) come in, multiple cooks (workers) prepare them in parallel, and completed orders (results) go out!"
-
 ```
-ZIP File Stream (like a conveyor belt)
-     │
-     ▼
-┌────────────┐
-│ Read Chunk │◄──── tokio async I/O
-└─────┬──────┘
-      │
-      ▼
-┌─────────────────┐
-│   Chunk Queue   │◄──── crossbeam channels
-└─────────┬───────┘
-          │
-    ┌─────┴─────┐
-    ▼     ▼     ▼
-┌─────┐ ┌─────┐ ┌─────┐
-│Work1│ │Work2│ │Work3│◄──── rayon parallel
-└──┬──┘ └──┬──┘ └──┬──┘
-   │       │       │
-   └───────┴───────┘
-          │
-          ▼
-    Final Results
+1. Read Last 64KB → Find EOCD → Get CD Location
+   │                    │            │
+   ▼                    ▼            ▼
+[Fast Scan]      [0x06054b50]   [CD Offset]
+
+2. Read CD → Process Entries → Update Results
+   │             │               │
+   ▼             ▼               ▼
+[CD Data]    [File Info]    [Statistics]
 ```
 
-## 4. Performance Targets 🎯
-"Like a race car's speedometer - these are our speed goals!"
+## 4. ZIP Format Constants 📋
+```rust
+// Record Signatures
+EOCD_SIG: u32 = 0x06054b50  // End of Central Directory
+CDFH_SIG: u32 = 0x02014b50  // Central Directory File Header
+LFH_SIG: u32 = 0x04034b50   // Local File Header
 
-```
-Performance Dashboard
-┌────────────────────────┐
-│  🏃 Speed: 100MB/s    │ "As fast as downloading a movie!"
-│  💾 Memory: ~8MB/thread│ "Like having multiple small work tables"
-│  📦 Chunks: 256KB     │ "Perfect bite-sized pieces"
-│  🧵 Threads: Auto     │ "Uses all available CPU power"
-└────────────────────────┘
-```
-
-## 5. Dependencies 📦
-"Like choosing the right tools for a job - each crate has a specific purpose!"
-
-```
-Tool Belt
-┌─────────────┐
-│ tokio   🚀  │──► "The traffic controller for data"
-│ rayon   ⚡  │──► "The team manager for workers"
-│ zip     📦  │──► "The package inspector"
-│ crossbeam 🔄 │──► "The message delivery system"
-│ clap    💻  │──► "The friendly receptionist"
-│ indicatif📊 │──► "The progress tracker"
-└─────────────┘
+// Format Constraints
+MAX_COMMENT_SIZE: u16 = 0xFFFF  // 64KB max comment
+MIN_EOCD_SIZE: u32 = 22       // Minimum EOCD record size
 ```
 
-## 6. Advanced Features ⚡
-"Like a car's dashboard - showing all the important stats while you drive!"
-
+## 5. Processing Strategy 🎯
 ```
-Stats Dashboard (collected in parallel)
-┌─────────────────────────────┐
-│ 📊 Compression: 75%        │ "How well files are squeezed"
-│ 📁 Types: [PDF, JPG, DOC]  │ "What kinds of files we found"
-│ 💾 Memory: 120MB Used      │ "How much RAM we're using"
-│ ⚡ Speed: 150MB/s          │ "How fast we're processing"
-└─────────────────────────────┘
-```
+1. End Scanning:
+   - Start at EOF-22 (minimum EOCD size)
+   - Scan backwards up to 64KB
+   - Look for EOCD signature
+   - Handle ZIP file comments
 
-## 7. Rust Implementation Patterns 🦀
-"Think of this like a detailed blueprint showing how all our Rust pieces work together!"
-
-### 7.1 Ownership Flow 📦
-"Like passing a baton in a relay race - data moves between components!"
-
-```
-                 ownership moves →
-┌──────────┐    ┌──────────┐    ┌──────────┐
-│  Reader  │───►│Processor │───►│ Results  │
-└──────────┘    └──────────┘    └──────────┘
-     │               │               │
-     └───&mut───┘    └────&────┘    
-    borrows for       immutable
-     writing          references
-
-Example:
-let chunk = reader.read_chunk()?;  // Reader owns chunk
-processor.process(chunk);          // Ownership moves to processor
-results.push(chunk.results);      // Final ownership in results
+2. Central Directory:
+   - Get CD offset from EOCD
+   - Read CD in one operation
+   - Process all file entries
+   - Skip directory entries
 ```
 
-### 7.2 Async/Await Pattern 🔄
-"Like a restaurant kitchen with order tickets and callbacks!"
-
+## 6. Memory Model 🧠
 ```
-async fn process_zip() {
-    ┌─────────────┐
-    │ Main Thread │
-    └──────┬──────┘
-           │ spawn_blocking
-    ┌──────▼──────┐
-    │ ZIP Reader  │──┐ .await
-    └──────┬──────┘  │
-           │ yield   │
-    ┌──────▼──────┐  │
-    │ Other Tasks │  │
-    └──────┬──────┘  │
-           │ resume  │
-    ┌──────▼──────┐◄─┘
-    │   Results   │
-    └─────────────┘
+End Scan Buffer   CD Buffer        Results
+     64KB           Variable        Thread-Safe
+      │               │               │
+[Last Block]    [File Records]    [Arc<RwLock>]
 ```
 
-### 7.3 Thread Safety 🔒
-"Like multiple chefs sharing kitchen tools safely!"
-
+## 7. Error Handling 🚨
 ```
-                 Arc<Mutex<Queue>>
-┌──────────┐     ┌──────────┐     ┌──────────┐
-│ Thread 1 │────►│  Shared  │◄────│ Thread 2 │
-└──────────┘     │   Data   │     └──────────┘
-                 └──────────┘
-                      ▲
-                      │
-                 ┌──────────┐
-                 │ Thread 3 │
-                 └──────────┘
+End Scan Errors:
+- No EOCD found
+- Invalid CD offset
+- Comment contains signature
 
-Example:
-let queue = Arc::new(Mutex::new(Vec::new()));
-let queue_clone = Arc::clone(&queue);  // Reference counting
-queue_clone.lock()?.push(item);       // Safe mutation
+CD Processing:
+- Invalid signatures
+- Corrupt entries
+- Size mismatches
 ```
 
-### 7.4 Error Propagation ❌
-"Like a game of hot potato with error handling!"
+## 8. Implementation Notes 📝
 
+### ZIP Format Rules
 ```
-Result<Analysis, Error>
-     ┌───────────┐
-     │   main    │
-     └─────┬─────┘
-           │ ?
-    ┌──────▼─────┐
-    │   reader   │
-    └──────┬─────┘
-           │ ?
-    ┌──────▼─────┐
-    │ processor  │
-    └──────┬─────┘
-           │ ?
-    ┌──────▼─────┐
-    │  results   │
-    └───────────┘
-
-Example:
-async fn process() -> Result<(), Error> {
-    let data = read_file().await?;    // Error propagates up
-    process_data(data)?;              // Chain of ? operators
-    save_results()?;                  // Unified error handling
-    Ok(())
-}
+1. EOCD must be last (before comment)
+2. CD contains true file list
+3. CD entries point to local headers
+4. Directory entries end with '/'
 ```
 
-### 7.5 Memory Management 💾
-"Like organizing a warehouse with automatic cleanup!"
-
+### Performance Optimizations
 ```
-Scope-Based Cleanup:
-┌─────────────────────┐
-│ fn process() {      │
-│   let data = Data   │──┐
-│   process(data)     │  │
-│ } // Drop here      │◄─┘
-└─────────────────────┘
-
-Buffer Management:
-┌──────────┐
-│ Buffer 1 │◄─┐
-└──────────┘  │    ┌─────────────┐
-              ├────│ Buffer Pool  │
-┌──────────┐  │    └─────────────┘
-│ Buffer 2 │◄─┘
-└──────────┘
+1. Fast end scan (64KB max)
+2. Single CD read operation
+3. Parallel entry processing
+4. Memory-mapped CD for large files
 ```
 
-### 7.6 Data Flow Control 🔄
-"Like traffic lights controlling data flow!"
-
+### Safety Checks
 ```
-                 Backpressure
-┌──────────┐     Control     ┌──────────┐
-│ Producer │◄───────┐        │Consumer  │
-└────┬─────┘        │        └────┬─────┘
-     │         ┌────┴─────┐       │
-     └────────►│ Channel  │◄──────┘
-              └──────────┘
-              Bounded Queue
-
-Example:
-let (tx, rx) = channel(32);  // Bounded channel
-tx.send(chunk).await?;       // Backpressure
-rx.recv().await?;            // Flow control
+1. Validate all signatures
+2. Check CD offset bounds
+3. Verify entry sizes
+4. Handle ZIP64 extensions
 ```
-
-=== Change Log ===
-Removed:
-- Complex error handling
-- Multiple output formats
-- Feature flags
-- Development workflow
-- Testing strategy
-- Extra dependencies
-- Utils module
-- Writer module
-
-Simplified:
-- Module structure (4 files total)
-- Dependencies (6 core crates)
-- Error handling (basic Result)
-- Progress tracking (single bar)
-
-Focus Areas:
-+ Tokio async streaming
-+ Rayon parallel processing
-+ Memory-efficient chunks
-+ Thread coordination
-+ Performance optimization
