@@ -469,3 +469,198 @@ Add:
    - Using self after borrow
    - Not caching needed values
    - Complex borrowing patterns
+
+## Mutability Patterns 🔒
+1. Reader Pattern:
+   ```rust
+   // WRONG ❌
+   let reader = ZipReader::new(path).await?;
+   let stream = reader.stream_chunks();  // Needs mut
+
+   // CORRECT ✅
+   let mut reader = ZipReader::new(path).await?;  // Declare as mut
+   let mut stream = reader.stream_chunks();  // Get mutable stream
+   ```
+
+2. Stream Creation:
+   ```rust
+   // WRONG ❌
+   pub fn stream_chunks(&self) -> impl Stream<Item = Result<Chunk>> {
+       // Can't mutate self
+   }
+
+   // CORRECT ✅
+   pub fn stream_chunks(&mut self) -> impl Stream<Item = Result<Chunk>> + '_ {
+       // Can mutate self, explicit lifetime
+   }
+   ```
+
+3. Variable Declaration Rules:
+   ```rust
+   // Always declare variables that will be mutated as mut
+   let mut reader = /* initialization */;
+   let mut stream = /* initialization */;
+   let mut results = /* initialization */;
+
+   // Document mutability requirements in comments
+   /// Requires mutable reference for streaming
+   pub fn stream_chunks(&mut self) -> impl Stream
+   ```
+
+## Common Mutability Pitfalls 🚫
+1. Stream Creation:
+   - Always declare stream source as mut
+   - Always declare stream variable as mut
+   - Use explicit lifetime bounds
+
+2. Async Operations:
+   - Mark async functions that need mutation with &mut self
+   - Declare futures as mut when needed
+   - Handle Pin<&mut Self> correctly
+
+3. Resource Management:
+   - Declare resource handles as mut when needed
+   - Document mutability requirements
+   - Use RwLock for shared mutable state
+
+## Implementation Checklist ✅
+Add:
+- [ ] Check all stream source declarations
+- [ ] Verify mut declarations
+- [ ] Validate lifetime bounds
+- [ ] Document mutability requirements
+
+## Error Prevention Patterns 📋
+Add:
+1. Mutability Guidelines:
+   - Always declare stream sources as mut
+   - Always declare stream variables as mut
+   - Document mutability in comments
+
+2. Resource Patterns:
+   - Use mut for file handles
+   - Use mut for streams
+   - Use mut for buffers
+
+3. Testing Requirements:
+   ```rust
+   #[test]
+   fn test_mutability_patterns() {
+       let mut reader = Reader::new();  // Test mut declaration
+       let mut stream = reader.get_stream();  // Test mut stream
+       // Test usage...
+   }
+   ```
+
+## Development Process & Quality Gates 🚦
+
+1. Pre-Implementation Gate:
+   ```bash
+   # MUST complete before writing any code:
+   - [ ] Create checklist from blueprint
+   - [ ] Document required traits and types
+   - [ ] Create error log template
+   - [ ] Setup validation workflow
+   ```
+
+2. Implementation Gate:
+   ```rust
+   // MUST follow this order:
+   1. Core types and constants
+      pub const MAX_FILE_SIZE: u64 = 0xFFFFFFFF;
+      pub struct ZipHeader { ... }
+
+   2. Error handling
+      #[derive(Error)]
+      pub enum Error { ... }
+
+   3. Trait implementations
+      impl Stream for ChunkStream { ... }
+
+   4. Business logic
+      pub fn process_chunk(...) { ... }
+   ```
+
+3. Validation Gate:
+   ```bash
+   # MUST run after each module:
+   cargo check              # Compile check
+   cargo clippy            # Linting
+   cargo test              # Unit tests
+   cargo fmt              # Formatting
+   ```
+
+4. Integration Gate:
+   ```bash
+   # MUST verify cross-module impacts:
+   - [ ] Check trait bounds
+   - [ ] Verify error propagation
+   - [ ] Test async flows
+   - [ ] Validate resource cleanup
+   ```
+
+## Error Prevention Workflow 🔄
+
+1. Error Log Template:
+   ```markdown
+   # Module Implementation Status
+   ## Current Changes
+   - [ ] List changes being made
+   - [ ] Document expected impacts
+   
+   ## Validation Status
+   - [ ] Cargo check passed
+   - [ ] Clippy warnings addressed
+   - [ ] Tests passing
+   
+   ## Cross-Module Impact
+   - [ ] List affected modules
+   - [ ] Document required updates
+   ```
+
+2. Change Management:
+   ```rust
+   // MUST document in error log:
+   - Before: Current implementation
+   - Change: What's being modified
+   - After: Expected result
+   - Impact: Cross-module effects
+   ```
+
+3. Review Process:
+   ```bash
+   # MUST verify before commit:
+   - [ ] Error log updated
+   - [ ] All gates passed
+   - [ ] Tests added/updated
+   - [ ] Documentation complete
+   ```
+
+## Quality Assurance Checklist ✅
+
+1. Code Quality:
+   ```rust
+   // MUST verify:
+   - No unused imports
+   - Proper error handling
+   - Resource cleanup
+   - Documentation
+   ```
+
+2. Type Safety:
+   ```rust
+   // MUST check:
+   - Trait bounds complete
+   - Lifetime annotations
+   - Mutability requirements
+   - Type conversions
+   ```
+
+3. Resource Safety:
+   ```rust
+   // MUST validate:
+   - File handles cleaned up
+   - Memory properly managed
+   - Threads properly joined
+   - Cancellation handled
+   ```

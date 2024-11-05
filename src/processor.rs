@@ -4,7 +4,7 @@ use crate::types::{Chunk, ZipAnalysis, Error, Result, ZipHeader};
 
 /// Processor for parallel ZIP chunk analysis
 pub struct Processor {
-    /// Thread pool for parallel processing
+    /// Thread pool for parallel processing with 8MB stack size
     thread_pool: rayon::ThreadPool,
 }
 
@@ -21,6 +21,10 @@ impl Processor {
     }
     
     /// Process a chunk of ZIP data
+    /// 
+    /// # Arguments
+    /// * `chunk` - ZIP data chunk to process
+    /// * `results` - Mutable reference to analysis results
     pub fn process_chunk(&self, chunk: Chunk, results: &mut ZipAnalysis) -> Result<()> {
         self.thread_pool.install(|| {
             // Basic validation

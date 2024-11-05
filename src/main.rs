@@ -130,7 +130,7 @@ async fn process_zip(
     let start_time = Instant::now();
     
     // Initialize with proper error handling
-    let reader = ZipReader::new(path).await?;
+    let mut reader = ZipReader::new(path).await?;
     let processor = Processor::new_with_threads(threads)?;
     
     let results = Arc::new(RwLock::new(ZipAnalysis::new()));

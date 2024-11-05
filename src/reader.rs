@@ -1,7 +1,7 @@
 use tokio::fs::File;
 use tokio::io::{AsyncReadExt};
 use std::path::PathBuf;
-use futures::{Stream, Future};
+use futures::Stream;
 use pin_project_lite::pin_project;
 use std::pin::Pin;
 use std::task::{Context, Poll};
