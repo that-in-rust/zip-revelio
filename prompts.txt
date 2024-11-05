@@ -6,5 +6,8 @@ Start from Section 2
 
 Explain your thought process, data flow, information flow, whatever that is with your 300 IQ
 
+Based on @ref01prd.txt  please have a look at @ref02archL1.txt  - it is supposed to be built in the style of @visualASCII202410.txt 
+
+It should have the information on how are we thinking about the problem and what are the big rocks, big dependencies, big pieces of code etc 
 
 
