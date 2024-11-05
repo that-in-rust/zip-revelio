@@ -10,8 +10,10 @@ const ZIP_CENTRAL_DIR_SIGNATURE: u32     = 0x02014b50;
 const STORED: u16 = 0;
 const DEFLATED: u16 = 8;
 
-// Size limits for v1.0
-const MAX_FILE_SIZE: u64 = 0xFFFFFFFF;  // 4GB limit
+// Size and format limits
+const MAX_FILE_SIZE: u64 = 0xFFFFFFFF;  // 4GB limit (ZIP32)
+const MAX_FILE_COUNT: u32 = 0xFFFF;     // 65,535 files (ZIP32)
+const CHUNK_SIZE: usize = 4 * 1024 * 1024;  // 4MB chunks
 ```
 
 ## 2. Core Data Structures
@@ -29,6 +31,8 @@ struct ZipHeader {
 
 // Validation Strategy
 - File-level validations in reader.rs
+  * Check file count <= 65,535
+  * Verify ZIP32 format
 - Chunk-level validations in processor.rs
 - ASCII filenames only
 - Size < 4GB

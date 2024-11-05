@@ -6,12 +6,53 @@ Core Requirements 🎯
 2. Uses tokio for async I/O and rayon for parallel decompression
 3. Outputs analysis to a text file
 4. Shows progress bar during analysis
-5. Handles large ZIP files (>10GB) efficiently via streaming
+5. Handles ZIP files efficiently:
+   - Minimum chunk size: 4MB (fixed)
+   - Maximum file size: 4GB (ZIP32 format limitation)
+   - Skips non-ASCII filenames
+   - Supports only Store/Deflate compression
 6. Provides detailed file statistics and compression info
-7. Maintains memory efficiency through chunked processing
+7. Maintains memory efficiency through fixed 4MB chunks
 8. Graceful error handling
 9. Simple CLI: `cargo run -- input.zip output.txt`
+
+Example Report Format:
+```
+=== ZIP Analysis Report ===
+
+Total size: 1.31 MiB
+Files analyzed: 6
+Analysis time: 0.29s
+
+Overall compression ratio: 23.7%
+Total compressed: 1.00 MiB
+Total uncompressed: 1.31 MiB
+
+File types:
+  ZIP: 6
+
+Compression methods:
+  Stored: 3
+  Deflated: 3
+
+Files (sorted alphabetically):
+/path/to/file1.zip
+/path/to/file2.zip
+/path/to/file3.zip
+/path/to/file4.zip
+/path/to/file5.zip
+/path/to/file6.zip
+```
 
 e.g.
 1.
 cargo run -- /home/amuldotexe/Downloads/node-main.zip /home/amuldotexe/Downloads/node-main-20241105.txt
+
+Constraints:
+- Traditional ZIP format only (not ZIP64):
+  - Max single file size: 4GB
+  - Max archive size: 4GB
+  - Max number of files: 65,535
+- ASCII filenames only
+- Store/Deflate compression only
+- Fixed 4MB chunk size
