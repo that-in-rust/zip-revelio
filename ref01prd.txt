@@ -1,4 +1,4 @@
-# Parallel ZIP File Analyzer - PRD
+# ziprevelio PRD
 
 Core Requirements 🎯
 
@@ -7,14 +7,9 @@ Core Requirements 🎯
 3. Outputs analysis to a text file
 4. Shows progress bar during analysis
 5. Handles ZIP files efficiently:
-   - Fixed 4MB chunks for optimal performance
-   - Supports both ZIP32 and ZIP64 formats
-   - Skips non-ASCII filenames (for compatibility)
-   - Supports Store/Deflate compression methods
 6. Provides detailed file statistics and compression info
-7. Maintains memory efficiency through fixed 4MB chunks
-8. Graceful error handling
-9. Simple CLI: `cargo run -- input.zip output.txt`
+7. Graceful error handling
+8. Simple CLI: `cargo run -- input.zip output.txt`
 
 Example Report Format:
 ```
@@ -51,4 +46,3 @@ cargo run -- /home/amuldotexe/Downloads/node-main.zip /home/amuldotexe/Downloads
 Constraints:
 - ASCII filenames only (for compatibility)
 - Store/Deflate compression only (most common methods)
-- Fixed 4MB chunk size (for performance)

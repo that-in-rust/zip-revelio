@@ -1,6 +1,8 @@
+Append below this - Give me 3 variations of an MVP PRD which can help us solve @ref01prd.txt while also making sure we can show how good we are at parallel processing & async programming - use research from the web if needed - each PRD should be note more than 7 bullets
 
+research @Web  and your 300 IQ to collect facts related to zip file format which can help us solve @ref01prd.txt 
 
-
+find . \( -name "*.rs" -o -name "*.txt" -o -name "*.toml" \) -type f -not -name "zz_all_files_v2.txt" -exec sh -c 'echo -e "\n\n=== $1 ===\n"; cat "$1"' sh {} \; > zz_all_files_v3.txt
 
 
 # ZIP Analyzer Implementation Progress
@@ -21,7 +23,9 @@
 
 for f in $(find . -name "*.rs"); do echo -e "\n\n=== $f ===\n"; cat "$f"; done > rust_filesv1.txt
 
+for f in $(find . -name "*.rs" -o -name "*.txt"); do echo -e "\n\n=== $f ===\n"; cat "$f"; done > rust_and_txt_files.txt
 
+for f in $(find . -name "*.rs" -o -name "*.txt" -o -name "*.toml"); do echo -e "\n\n=== $f ===\n"; cat "$f"; done > zz_all_files_v2.txt
 
 ===========================================
 04 Nov 2024 0800 hrs
