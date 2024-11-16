@@ -1,0 +1,250 @@
+# ZIP-Revelio System Overview 🏗️
+
+## Core Architecture
+```
+ZIP-Revelio
+├── Error System (utils/error.rs)
+│   ├── Central Error Type (ZipError)
+│   └── Module-specific Error Types
+│
+├── Memory Management (buffer/)
+│   ├── Buffer Pool
+│   │   ├── Small Buffers (<64KB)  -> Stack Allocated
+│   │   ├── Medium Buffers (<1MB)  -> Heap Pooled
+│   │   └── Large Buffers (>1MB)   -> Memory Mapped
+│   └── Resource Tracking
+│
+├── ZIP Processing (zip/)
+│   ├── Memory-Mapped Reader
+│   ├── Entry Processor
+│   └── CRC32 Validator
+│
+└── Parallel Engine (worker/)
+    ├── Thread Pool (max 16 threads)
+    ├── Work Distributor
+    └── Progress Tracker
+```
+
+## Type System Design
+
+1. Error Types:
+```rust
+// utils/error.rs
+pub enum ZipError {
+    Io(std::io::Error),
+    Memory(String),
+    Format(String),
+    Resource(String),
+    Progress(String),
+}
+
+// Module-specific errors map to ZipError
+impl From<BufferError> for ZipError { ... }
+impl From<WorkerError> for ZipError { ... }
+```
+
+2. Resource Types:
+```rust
+// buffer/pool.rs
+#[derive(Debug, Clone)]
+pub enum Buffer {
+    Small(Vec<u8>),     // <64KB, stack optimized
+    Medium(Vec<u8>),    // <1MB, pooled
+    Large(usize),       // >1MB, memory mapped
+}
+
+// Required traits
+impl Drop for Buffer {
+    fn drop(&mut self) {
+        // Proper cleanup in reverse order
+        match self {
+            Buffer::Large(id) => {
+                self.is_valid.store(false, Ordering::Release);
+                self.cleanup();
+            }
+            _ => {}
+        }
+    }
+}
+```
+
+3. Thread Safety:
+```rust
+// All shared types must be:
+Arc<T>     // For shared ownership
+Mutex<T>   // For exclusive access
+RwLock<T>  // For read-heavy data
+
+// Example:
+pub struct BufferPool {
+    small_pool: ArrayQueue<Vec<u8>>,
+    medium_pool: ArrayQueue<Vec<u8>>,
+    large_maps: RwLock<HashMap<usize, MemoryMap>>,
+    metrics: Arc<BufferMetrics>,  // Shared metrics
+}
+```
+
+4. Lifetime Management:
+```rust
+// Explicit lifetimes for references
+pub struct ZipReader<'a> {
+    data: &'a [u8],
+    position: usize,
+}
+
+// Lifetime bounds for generics
+pub trait ZipProcessor<'a> {
+    fn process(&self, data: &'a [u8]) -> Result<(), ZipError>;
+}
+```
+
+## Core Traits
+
+1. Required for All Types:
+   - Debug (for error reporting)
+   - Clone (where needed)
+   - Drop (for cleanup)
+   - Send + Sync (for thread safety)
+
+2. Error Types:
+   - std::error::Error
+   - Display
+   - Debug
+   - Clone
+
+3. Resource Types:
+   - Debug
+   - Drop
+   - Send + Sync
+   - AsRef/AsMut where applicable
+
+## Documentation Requirements
+
+1. Public API:
+```rust
+/// Acquires a buffer from the pool.
+///
+/// # Safety
+/// - Buffer must be released back to the pool
+/// - Do not use after dropping the pool
+/// - Do not exceed MAX_BUFFER_SIZE
+///
+/// # Errors
+/// Returns BufferError if:
+/// - Size exceeds MAX_BUFFER_SIZE
+/// - Pool is exhausted
+/// - Memory allocation fails
+///
+/// # Thread Safety
+/// This function is thread-safe and can be called from multiple threads.
+pub fn acquire(&self, size: usize) -> Result<Buffer, BufferError>
+```
+
+2. Internal Implementation:
+```rust
+/// Internal helper for buffer cleanup.
+/// 
+/// # Implementation Notes
+/// - Called from Drop implementation
+/// - Handles cleanup in reverse order
+/// - Best-effort cleanup (logs errors but doesn't propagate)
+fn cleanup_internal(&mut self) { ... }
+```
+
+## Testing Requirements
+
+1. Unit Tests:
+```rust
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use anyhow::Result;
+
+    #[test]
+    fn test_all_error_paths() -> Result<()> {
+        // Test each error variant
+        let result = Buffer::new(usize::MAX);
+        assert!(matches!(
+            result,
+            Err(BufferError::AllocationFailed(_))
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn test_cleanup() -> Result<()> {
+        // Test resource cleanup
+        let buffer = create_test_buffer()?;
+        drop(buffer);
+        assert_resources_cleaned_up()?;
+        Ok(())
+    }
+}
+```
+
+2. Integration Tests:
+```rust
+#[test]
+fn test_cross_module_interaction() -> Result<()> {
+    let pool = Arc::new(BufferPool::new(Default::default())?);
+    let processor = ZipProcessor::new(pool.clone())?;
+    
+    // Test end-to-end workflow
+    processor.process_file("test.zip")?;
+    
+    // Verify cleanup
+    assert!(pool.is_empty()?);
+    Ok(())
+}
+```
+
+## Performance Guidelines
+
+1. Buffer Management:
+   - Use thread-local storage for small buffers
+   - Pool medium-sized buffers
+   - Memory map large files
+   - Pre-allocate pools where possible
+
+2. Concurrency:
+   - Limit thread count (MAX_THREADS)
+   - Use work stealing for load balancing
+   - Minimize lock contention
+   - Use appropriate atomic orderings
+
+3. Memory Usage:
+   - Validate sizes before allocation
+   - Implement buffer reuse
+   - Clean up resources promptly
+   - Monitor memory pressure
+
+## Error Handling Guidelines
+
+1. Production Code:
+```rust
+fn process_data() -> Result<(), ZipError> {
+    // Always propagate with context
+    let data = read_file()
+        .map_err(|e| ZipError::Io(e))?;
+    
+    // Add context to errors
+    process_internal(&data)
+        .map_err(|e| ZipError::Format(
+            format!("Failed to process data: {}", e)
+        ))?;
+    
+    Ok(())
+}
+```
+
+2. Test Code:
+```rust
+#[test]
+fn test_feature() -> Result<()> {
+    // Use anyhow for tests
+    let result = function_under_test()
+        .map_err(|e| anyhow::anyhow!("Test failed: {}", e))?;
+    
+    assert!(result.is_valid());
+    Ok(())
+}

@@ -1,0 +1,200 @@
+# ZIP-Revelio Error Handling Guide 🚨
+
+## Error Type Hierarchy
+
+1. Central Error Type:
+```rust
+// utils/error.rs
+pub enum ZipError {
+    Io(std::io::Error),
+    Memory(String),
+    Format(String),
+    Resource(String),
+    Progress(String),
+    Worker(String),
+}
+
+impl std::error::Error for ZipError {}
+impl std::fmt::Display for ZipError { ... }
+impl std::fmt::Debug for ZipError { ... }
+```
+
+2. Module-Specific Errors:
+```rust
+// buffer/error.rs
+pub enum BufferError {
+    AllocationFailed(String),
+    PoolExhausted,
+    InvalidSize(usize),
+    MapFailed(String),
+}
+
+impl From<BufferError> for ZipError {
+    fn from(err: BufferError) -> Self {
+        match err {
+            BufferError::AllocationFailed(msg) => ZipError::Memory(msg),
+            BufferError::PoolExhausted => 
+                ZipError::Resource("Buffer pool exhausted".into()),
+            BufferError::InvalidSize(size) => 
+                ZipError::Memory(format!("Invalid buffer size: {}", size)),
+            BufferError::MapFailed(msg) => ZipError::Memory(msg),
+        }
+    }
+}
+```
+
+## Error Propagation Rules
+
+1. Public API:
+```rust
+// Always return ZipError
+pub fn process_file(path: &Path) -> Result<Stats, ZipError> {
+    let file = File::open(path)
+        .map_err(|e| ZipError::Io(e))?;
+    // ...
+}
+```
+
+2. Internal Functions:
+```rust
+// Can use module-specific errors
+fn internal_process(data: &[u8]) -> Result<(), BufferError> {
+    if data.len() > MAX_SIZE {
+        return Err(BufferError::InvalidSize(data.len()));
+    }
+    // ...
+    Ok(())
+}
+```
+
+3. Error Context:
+```rust
+// Add context to errors
+fn process_entry(entry: &ZipEntry) -> Result<(), ZipError> {
+    process_data(&entry.data)
+        .map_err(|e| ZipError::Format(
+            format!("Failed to process {}: {}", entry.name, e)
+        ))?;
+    Ok(())
+}
+```
+
+## Error Recovery Patterns
+
+1. Resource Cleanup:
+```rust
+impl Drop for Buffer {
+    fn drop(&mut self) {
+        // Always clean up, even if error occurred
+        if let Err(e) = self.cleanup() {
+            eprintln!("Cleanup failed: {}", e);
+        }
+    }
+}
+```
+
+2. Partial Success:
+```rust
+pub struct ProcessResult {
+    successful: Vec<ProcessedEntry>,
+    failed: Vec<(Entry, ZipError)>,
+}
+
+fn process_entries(entries: &[Entry]) -> ProcessResult {
+    let mut result = ProcessResult::default();
+    for entry in entries {
+        match process_entry(entry) {
+            Ok(processed) => result.successful.push(processed),
+            Err(e) => result.failed.push((entry.clone(), e)),
+        }
+    }
+    result
+}
+```
+
+## Testing Error Paths
+
+1. Unit Tests:
+```rust
+#[test]
+fn test_buffer_errors() -> Result<()> {
+    // Test allocation failure
+    let result = Buffer::new(usize::MAX);
+    assert!(matches!(
+        result,
+        Err(BufferError::AllocationFailed(_))
+    ));
+    
+    // Test pool exhaustion
+    let pool = BufferPool::new(1)?;
+    let _buf1 = pool.acquire(1024)?;
+    let buf2 = pool.acquire(1024);
+    assert!(matches!(buf2, Err(BufferError::PoolExhausted)));
+    
+    Ok(())
+}
+```
+
+2. Integration Tests:
+```rust
+#[test]
+fn test_error_propagation() -> Result<()> {
+    // Test error conversion
+    let buffer_error = BufferError::InvalidSize(1024);
+    let zip_error: ZipError = buffer_error.into();
+    assert!(matches!(zip_error, ZipError::Memory(_)));
+    
+    Ok(())
+}
+```
+
+## Error Reporting
+
+1. User-Facing Errors:
+```rust
+impl ZipError {
+    pub fn user_message(&self) -> String {
+        match self {
+            ZipError::Io(e) => format!("File error: {}", e),
+            ZipError::Memory(msg) => format!("Memory error: {}", msg),
+            ZipError::Format(msg) => format!("ZIP format error: {}", msg),
+            ZipError::Resource(msg) => format!("Resource error: {}", msg),
+            ZipError::Progress(msg) => format!("Progress error: {}", msg),
+            ZipError::Worker(msg) => format!("Worker error: {}", msg),
+        }
+    }
+}
+```
+
+2. Debug Information:
+```rust
+impl ZipError {
+    pub fn debug_info(&self) -> String {
+        format!("{:#?}", self)
+    }
+}
+```
+
+## Error Metrics
+
+1. Error Tracking:
+```rust
+pub struct ErrorMetrics {
+    io_errors: AtomicUsize,
+    memory_errors: AtomicUsize,
+    format_errors: AtomicUsize,
+    resource_errors: AtomicUsize,
+}
+
+impl ErrorMetrics {
+    pub fn record(&self, error: &ZipError) {
+        match error {
+            ZipError::Io(_) => 
+                self.io_errors.fetch_add(1, Ordering::Relaxed),
+            ZipError::Memory(_) => 
+                self.memory_errors.fetch_add(1, Ordering::Relaxed),
+            // ...
+        };
+    }
+}
+```

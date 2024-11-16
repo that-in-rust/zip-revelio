@@ -1,0 +1,888 @@
+# Rust Anti-Patterns and Best Practices Guide 🦀
+
+## Memory Management Patterns
+
+### ✅ Good Patterns
+
+1. RAII (Resource Acquisition Is Initialization)
+```rust
+impl Drop for Buffer {
+    fn drop(&mut self) {
+        match self {
+            Buffer::Large(id) => {
+                // Explicit cleanup in drop
+                unsafe { self.unmap() };
+            }
+            _ => {}
+        }
+    }
+}
+```
+
+2. Smart Pointer Usage
+```rust
+// Use Arc for shared ownership
+let buffer_pool = Arc::new(BufferPool::new(config));
+// Use Mutex for thread-safe mutable access
+let results = Arc::new(Mutex::new(Vec::new()));
+```
+
+3. Explicit Lifetimes
+```rust
+pub struct ZipReader<'a> {
+    data: &'a [u8],
+    position: usize,
+}
+```
+
+4. Thread-Local Storage
+```rust
+// Good: Thread-safe global state
+thread_local! {
+    static BUFFER_POOL: RefCell<Option<Arc<BufferPool>>> = RefCell::new(None);
+}
+
+// Usage
+BUFFER_POOL.with(|pool| {
+    if let Some(pool) = &*pool.borrow() {
+        // Use pool safely
+    }
+});
+```
+
+5. Memory Mapping Safety
+```rust
+// Good: Safe memory mapping
+let mmap = unsafe {
+    MmapOptions::new()
+        .populate() // Pre-fault pages
+        .map(&file)?
+};
+Self::validate_map(&mmap)?;
+```
+
+### ❌ Anti-Patterns
+
+1. Manual Memory Management
+```rust
+// BAD: Manual cleanup
+fn cleanup(&mut self) {
+    self.free_resources();
+}
+
+// GOOD: Use Drop trait
+impl Drop for Resource {
+    fn drop(&mut self) {
+        // Automatic cleanup
+    }
+}
+```
+
+2. Raw Pointers Without Safety
+```rust
+// BAD: Unsafe raw pointer usage
+let ptr = data.as_ptr();
+unsafe { *ptr = 42; }
+
+// GOOD: Safe abstractions
+let mut data = vec![0; size];
+data[0] = 42;
+```
+
+3. Global Mutable State
+```rust
+// BAD: Unsafe global state
+static mut GLOBAL_POOL: Option<BufferPool> = None;
+
+// GOOD: Thread-local or Arc<RwLock<_>>
+static POOL: Lazy<Arc<RwLock<BufferPool>>> = 
+    Lazy::new(|| Arc::new(RwLock::new(BufferPool::new())));
+```
+
+4. Unsafe Memory Access
+```rust
+// BAD: Unchecked memory access
+let ptr = data.as_ptr();
+unsafe { *ptr.add(1) = 42; }
+
+// GOOD: Safe slice access
+if let Some(elem) = data.get_mut(1) {
+    *elem = 42;
+}
+```
+
+5. Resource Leaks
+```rust
+// BAD: Manual resource management
+let file = File::open("data")?;
+process_file(&file);
+file.close(); // Explicit close unnecessary
+
+// GOOD: RAII
+let file = File::open("data")?;
+process_file(&file)?; // File closes automatically
+```
+
+## Concurrency Patterns
+
+### ✅ Good Patterns
+
+1. Message Passing
+```rust
+use crossbeam::channel;
+let (tx, rx) = channel::bounded(100);
+tx.send(message)?;
+let received = rx.recv()?;
+```
+
+2. Thread Pool Management
+```rust
+let pool = ThreadPoolBuilder::new()
+    .num_threads(thread_count)
+    .build()
+    .map_err(|e| ZipError::Memory(e.to_string()))?;
+```
+
+3. Atomic Operations
+```rust
+use std::sync::atomic::{AtomicU64, Ordering};
+self.processed.fetch_add(bytes, Ordering::Relaxed);
+```
+
+4. Memory Ordering
+```rust
+// Good: Proper memory ordering for visibility
+self.processed.fetch_add(bytes, Ordering::Release);
+self.last_update.load(Ordering::Acquire)
+```
+
+5. Lock Guards
+```rust
+// Good: Automatic lock release
+if let Ok(guard) = mutex.lock() {
+    guard.process()?;
+} // Lock released here
+```
+
+### ❌ Anti-Patterns
+
+1. Shared Mutable State
+```rust
+// BAD: Global mutable state
+static mut COUNTER: u32 = 0;
+
+// GOOD: Use Atomic types
+static COUNTER: AtomicU32 = AtomicU32::new(0);
+```
+
+2. Deadlock-Prone Locking
+```rust
+// BAD: Potential deadlock
+let _lock1 = mutex1.lock()?;
+let _lock2 = mutex2.lock()?; // Might deadlock
+
+// GOOD: Consistent lock ordering
+if let (Ok(lock1), Ok(lock2)) = (mutex1.try_lock(), mutex2.try_lock()) {
+    // Use locks
+}
+```
+
+3. Relaxed Ordering Overuse
+```rust
+// BAD: Relaxed ordering for synchronization
+count.fetch_add(1, Ordering::Relaxed);
+
+// GOOD: Proper ordering
+count.fetch_add(1, Ordering::Release);
+```
+
+4. Lock Contention
+```rust
+// BAD: Long-held locks
+let _lock = mutex.lock()?;
+expensive_operation(); // Lock held too long
+
+// GOOD: Minimal lock scope
+let data = {
+    let lock = mutex.lock()?;
+    lock.get_data().clone()
+}; // Lock released
+expensive_operation(data);
+```
+
+5. Race Conditions
+```rust
+// BAD: Check-then-act race
+if map.contains_key(&k) {
+    map.get(&k).unwrap().process();
+}
+
+// GOOD: Atomic operation
+if let Some(v) = map.get(&k) {
+    v.process();
+}
+```
+
+## Error Handling Patterns
+
+### ✅ Good Patterns
+
+1. Custom Error Types
+```rust
+#[derive(Error, Debug)]
+pub enum ZipError {
+    #[error("I/O error: {0}")]
+    Io(#[from] std::io::Error),
+    #[error("Memory error: {0}")]
+    Memory(String),
+}
+```
+
+2. Result Propagation
+```rust
+pub fn process(&mut self) -> Result<(), ZipError> {
+    self.validate()?;
+    self.handle_data()?;
+    Ok(())
+}
+```
+
+3. Error Context
+```rust
+// Good: Rich error context
+fn process() -> Result<(), Error> {
+    file.read()
+        .map_err(|e| Error::Io(format!("Failed to read: {}", e)))?;
+    Ok(())
+}
+```
+
+4. Error Propagation
+```rust
+// Good: ? operator usage
+fn process_all() -> Result<(), Error> {
+    let data = read_file()?;
+    validate_data(&data)?;
+    save_results(&data)?;
+    Ok(())
+}
+```
+
+### ❌ Anti-Patterns
+
+1. Panic in Libraries
+```rust
+// BAD: Panic in library code
+fn process() {
+    panic!("Unexpected error");
+}
+
+// GOOD: Return Result
+fn process() -> Result<(), Error> {
+    Err(Error::Unexpected)
+}
+```
+
+2. Unwrap/Expect Usage
+```rust
+// BAD: Unwrap in production
+let data = map.get("key").unwrap();
+
+// GOOD: Proper error handling
+let data = map.get("key")
+    .ok_or_else(|| Error::KeyNotFound)?;
+```
+
+3. Error Swallowing
+```rust
+// BAD: Ignoring errors
+let _ = file.write(data);
+
+// GOOD: Handle or propagate
+file.write(data)
+    .map_err(|e| Error::Write(e))?;
+```
+
+4. Incomplete Error Testing
+```rust
+// BAD: Only testing happy path
+#[test]
+fn test_success() {
+    assert!(process().is_ok());
+}
+
+// GOOD: Test all paths
+#[test]
+fn test_errors() {
+    assert!(matches!(
+        process_invalid(),
+        Err(Error::Invalid)
+    ));
+}
+```
+
+## Resource Management Patterns
+
+### ✅ Good Patterns
+
+1. Buffer Pooling
+```rust
+pub struct BufferPool {
+    small_pool: ArrayQueue<Vec<u8>>,
+    medium_pool: ArrayQueue<Vec<u8>>,
+}
+```
+
+2. File Locking
+```rust
+pub struct ZipReader {
+    file: RwLock<File>,
+    mmap: Mmap,
+}
+```
+
+3. Resource Limits
+```rust
+// Good: Configurable thread pool
+let pool = ThreadPoolBuilder::new()
+    .num_threads(std::cmp::min(
+        num_cpus::get(),
+        MAX_THREADS
+    ))
+    .build()?;
+```
+
+### ❌ Anti-Patterns
+
+1. Unbounded Resources
+```rust
+// BAD: Unlimited allocation
+let mut data = Vec::new();
+while let Some(chunk) = stream.next().await {
+    data.push(chunk?);
+}
+
+// GOOD: Bounded allocation
+let mut data = Vec::with_capacity(MAX_SIZE);
+while let Some(chunk) = stream.next().await {
+    if data.len() + chunk.len() > MAX_SIZE {
+        return Err(Error::TooLarge);
+    }
+    data.push(chunk?);
+}
+```
+
+2. Manual Resource Cleanup
+```rust
+// BAD: Manual cleanup
+fn cleanup(&mut self) {
+    self.free_resources();
+}
+
+// GOOD: RAII
+impl Drop for Resource {
+    fn drop(&mut self) {
+        // Automatic cleanup
+    }
+}
+```
+
+3. Resource Leaks
+```rust
+// BAD: Potential leak
+let mut handles = Vec::new();
+for _ in 0..10 {
+    handles.push(thread::spawn(|| {
+        // Thread work
+    }));
+}
+
+// GOOD: Ensure cleanup
+let handles: Vec<_> = (0..10)
+    .map(|_| thread::spawn(|| /* work */))
+    .collect();
+for handle in handles {
+    handle.join().unwrap();
+}
+```
+
+## Testing Patterns
+
+### ✅ Good Patterns
+
+1. Table-Driven Tests
+```rust
+#[test]
+fn test_compression() {
+    let cases = vec![
+        (vec![1, 2, 3], 3, "123"),
+        (vec![4, 5, 6], 3, "456"),
+    ];
+    
+    for (input, size, expected) in cases {
+        assert_eq!(compress(&input), expected);
+    }
+}
+```
+
+2. Property-Based Testing
+```rust
+#[test]
+fn test_buffer_properties() {
+    let pool = BufferPool::new(Default::default());
+    for size in [1024, 4096, 16384] {
+        let buf = pool.acquire(size)?;
+        assert!(buf.len() >= size);
+    }
+}
+```
+
+3. Concurrent Testing
+```rust
+#[test]
+fn test_thread_safety() {
+    let data = Arc::new(AtomicU64::new(0));
+    let threads: Vec<_> = (0..4).map(|_| {
+        let data = Arc::clone(&data);
+        thread::spawn(move || {
+            data.fetch_add(1, Ordering::SeqCst);
+        })
+    }).collect();
+    
+    for thread in threads {
+        thread.join().unwrap();
+    }
+    
+    assert_eq!(data.load(Ordering::SeqCst), 4);
+}
+```
+
+4. Error Path Testing
+```rust
+#[test]
+fn test_error_handling() {
+    let result = process_invalid_data();
+    assert!(matches!(
+        result,
+        Err(Error::InvalidData { .. })
+    ));
+}
+```
+
+### ❌ Anti-Patterns
+
+1. Incomplete Error Testing
+```rust
+// BAD: Only testing success
+#[test]
+fn test_process() {
+    assert!(process().is_ok());
+}
+
+// GOOD: Test all paths
+#[test]
+fn test_process() {
+    assert!(process_valid().is_ok());
+    assert!(matches!(
+        process_invalid(),
+        Err(Error::Invalid)
+    ));
+}
+```
+
+2. Flaky Tests
+```rust
+// BAD: Time-dependent test
+#[test]
+fn test_timeout() {
+    thread::sleep(Duration::from_secs(1));
+    assert!(process().is_ok());
+}
+
+// GOOD: Deterministic test
+#[test]
+fn test_timeout() {
+    let start = Instant::now();
+    process()?;
+    assert!(start.elapsed() < Duration::from_secs(2));
+}
+```
+
+3. Missing Cleanup Tests
+```rust
+// BAD: No cleanup verification
+#[test]
+fn test_resource() {
+    let resource = Resource::new();
+    drop(resource);
+}
+
+// GOOD: Verify cleanup
+#[test]
+fn test_resource() -> Result<()> {
+    let counter = Arc::new(AtomicUsize::new(0));
+    {
+        let resource = Resource::new(counter.clone());
+        resource.process();
+    } // Resource dropped here
+    assert_eq!(counter.load(Ordering::SeqCst), 0);
+}
+```
+
+## Additional Resources
+
+1. The Rust Book: https://doc.rust-lang.org/book/
+2. Rust API Guidelines: https://rust-lang.github.io/api-guidelines/
+3. Rust By Example: https://doc.rust-lang.org/rust-by-example/
+4. Asynchronous Programming in Rust: https://rust-lang.github.io/async-book/
+5. Rust Design Patterns: https://rust-unofficial.github.io/patterns/
+6. Rust Performance Book: https://nnethercote.github.io/perf-book/
+7. Rust Atomics and Locks: https://marabos.nl/atomics/
+
+## Checklist for Code Review
+
+1. Memory Safety
+   - [ ] No unsafe blocks without safety docs
+   - [ ] Proper Drop implementations
+   - [ ] Resource cleanup
+   - [ ] Memory validation
+
+2. Error Handling
+   - [ ] Custom error types
+   - [ ] No unwrap/expect
+   - [ ] Error context preservation
+   - [ ] All paths tested
+
+3. Concurrency
+   - [ ] Proper memory ordering
+   - [ ] Thread-safe data structures
+   - [ ] No deadlock potential
+   - [ ] Resource limits
+
+4. Performance
+   - [ ] Efficient buffer usage
+   - [ ] Minimal allocations
+   - [ ] Lock contention
+   - [ ] Memory locality
+
+5. Testing
+   - [ ] All error paths
+   - [ ] Concurrent access
+   - [ ] Resource cleanup
+   - [ ] Property-based tests
+
+## Memory Safety Patterns
+
+### ✅ Memory Map Safety
+```rust
+// ANTI-PATTERN: Unsafe memory map without validation
+let mmap = unsafe { Mmap::map(&file)? };
+
+// BEST PRACTICE: Safe memory map with validation
+let mmap = unsafe {
+    MmapOptions::new()
+        .populate() // Pre-fault pages
+        .map(&file)?
+};
+validate_map(&mmap)?;
+```
+
+### ✅ Resource Cleanup
+```rust
+// ANTI-PATTERN: Manual cleanup in drop
+impl Drop for Task {
+    fn drop(&mut self) {
+        if let Buffer::Large(id) = &self.buffer {
+            self.buffer_pool.release_large_buffer(*id);
+        }
+    }
+}
+
+// BEST PRACTICE: RAII with atomic validity
+impl Drop for Task {
+    fn drop(&mut self) {
+        // Mark as invalid first to prevent concurrent access
+        self.is_valid.store(false, Ordering::Release);
+        // Then clean up resources
+        match &self.buffer {
+            Buffer::Large(id) => self.buffer_pool.release_large_buffer(*id),
+            _ => {}
+        }
+    }
+}
+```
+
+### ✅ Thread-Local Storage
+```rust
+// ANTI-PATTERN: Global mutable state
+static mut BUFFER_POOL: Option<BufferPool> = None;
+
+// BEST PRACTICE: Thread-local storage
+thread_local! {
+    static BUFFER_POOL: RefCell<Option<Arc<BufferPool>>> = RefCell::new(None);
+}
+```
+
+## Concurrency Patterns
+
+### ✅ Thread Pool Configuration
+```rust
+// ANTI-PATTERN: Unbounded threads
+let thread_count = num_cpus::get();
+
+// BEST PRACTICE: Limited threads with configuration
+const MAX_THREADS: usize = 16;
+let thread_count = config.thread_count.unwrap_or_else(|| {
+    std::cmp::min(num_cpus::get(), MAX_THREADS)
+});
+```
+
+### ✅ Lock Safety
+```rust
+// ANTI-PATTERN: Long-held locks
+let mut guard = lock.write().unwrap();
+// ... long operation ...
+guard.update();
+
+// BEST PRACTICE: Minimal lock scope
+{
+    let mut guard = lock.write()?;
+    guard.update();
+}
+```
+
+### ✅ Memory Ordering
+```rust
+// ANTI-PATTERN: Relaxed ordering for all atomics
+count.fetch_add(1, Ordering::Relaxed);
+
+// BEST PRACTICE: Appropriate ordering
+// For single counter
+count.fetch_add(1, Ordering::SeqCst);
+// For validity flag
+is_valid.store(false, Ordering::Release);
+is_valid.load(Ordering::Acquire)
+```
+
+## Error Handling Patterns
+
+### ✅ Error Type Hierarchy
+```rust
+// ANTI-PATTERN: String errors
+fn process() -> Result<(), String> {
+    Err("something failed".into())
+}
+
+// BEST PRACTICE: Proper error types
+pub enum ZipError {
+    Io(std::io::Error),
+    Memory(String),
+    Format(String),
+}
+
+impl std::error::Error for ZipError {}
+impl From<std::io::Error> for ZipError {
+    fn from(err: std::io::Error) -> Self {
+        ZipError::Io(err)
+    }
+}
+```
+
+### ✅ Error Context
+```rust
+// ANTI-PATTERN: Lost context
+return Err(ZipError::Format("failed".into()));
+
+// BEST PRACTICE: Rich context
+return Err(ZipError::Format(
+    format!("Failed to process entry {}: {}", entry.name, error)
+));
+```
+
+## Resource Management Patterns
+
+### ✅ Buffer Pool
+```rust
+// ANTI-PATTERN: Direct allocation
+let buffer = vec![0; size];
+
+// BEST PRACTICE: Pooled allocation
+match size {
+    s if s <= SMALL_SIZE => small_pool.acquire(),
+    s if s <= MEDIUM_SIZE => medium_pool.acquire(),
+    _ => create_memory_map(size),
+}
+```
+
+### ✅ Thread Pool
+```rust
+// ANTI-PATTERN: Unbounded threads
+let thread_count = num_cpus::get();
+
+// BEST PRACTICE: Limited threads
+const MAX_THREADS: usize = 16;
+let thread_count = std::cmp::min(num_cpus::get(), MAX_THREADS);
+```
+
+## Testing Patterns
+
+### ✅ Error Testing
+```rust
+// ANTI-PATTERN: Unwrap in tests
+#[test]
+fn test_buffer() {
+    let buf = pool.acquire(1024).unwrap();
+}
+
+// BEST PRACTICE: Proper error handling
+#[test]
+fn test_buffer() -> Result<()> {
+    let buf = pool.acquire(1024)
+        .map_err(|e| anyhow::anyhow!("Failed: {}", e))?;
+    Ok(())
+}
+```
+
+### ✅ Resource Cleanup Testing
+```rust
+// ANTI-PATTERN: No cleanup verification
+#[test]
+fn test_resource() {
+    let res = Resource::new();
+    drop(res);
+}
+
+// BEST PRACTICE: Verify cleanup
+#[test]
+fn test_resource() -> Result<()> {
+    let res = Resource::new()?;
+    drop(res);
+    assert_resources_cleaned_up()?;
+    Ok(())
+}
+```
+
+## Documentation Patterns
+
+### ✅ Safety Documentation
+```rust
+// ANTI-PATTERN: Missing safety docs
+pub unsafe fn process_raw(ptr: *mut u8) {}
+
+// BEST PRACTICE: Comprehensive docs
+/// Process raw memory.
+///
+/// # Safety
+/// - `ptr` must be valid for writes
+/// - `ptr` must be properly aligned
+/// - The memory must not be accessed by other threads
+pub unsafe fn process_raw(ptr: *mut u8) {}
+```
+
+### ✅ Error Documentation
+```rust
+// ANTI-PATTERN: Undocumented errors
+pub fn process() -> Result<(), Error> {}
+
+// BEST PRACTICE: Documented errors
+/// Process data with error handling.
+///
+/// # Errors
+/// Returns error if:
+/// - File cannot be opened
+/// - Memory allocation fails
+/// - Data is invalid
+pub fn process() -> Result<(), Error> {}
+```
+
+## Performance Patterns
+
+### ✅ Buffer Reuse
+```rust
+// ANTI-PATTERN: New buffer per operation
+let buf = vec![0; 1024];
+process(&buf);
+
+// BEST PRACTICE: Buffer pool
+let buf = pool.acquire(1024)?;
+process(&buf);
+pool.release(buf);
+```
+
+### ✅ Lock Contention
+```rust
+// ANTI-PATTERN: Long-held locks
+let mut data = lock.write().unwrap();
+expensive_operation(&mut data);
+
+// BEST PRACTICE: Minimal lock scope
+let value = {
+    let data = lock.read()?;
+    data.get_value()
+};
+expensive_operation(value);
+```
+
+## Meta-Patterns
+
+1. Safety First
+   - Always validate memory before use
+   - Use atomic operations for flags
+   - Implement proper Drop traits
+   - Use RAII patterns
+
+2. Resource Management
+   - Pool expensive resources
+   - Implement size limits
+   - Use thread-local storage
+   - Clean up in reverse order
+
+3. Error Handling
+   - Propagate errors with context
+   - Never unwrap in production
+   - Use type system for safety
+   - Test error paths
+
+4. Concurrency
+   - Limit thread counts
+   - Minimize lock scope
+   - Use appropriate memory ordering
+   - Test concurrent access
+
+5. Testing
+   - Test cleanup paths
+   - Test concurrent access
+   - Test error conditions
+   - Use proper error handling
+
+## Implementation Checklist
+
+1. Memory Safety
+   - [ ] Validate all memory operations
+   - [ ] Use RAII for resource management
+   - [ ] Implement Drop for cleanup
+   - [ ] Add atomic validity tracking
+
+2. Error Handling
+   - [ ] Create proper error types
+   - [ ] Add error context
+   - [ ] Document error cases
+   - [ ] Test error paths
+
+3. Resource Management
+   - [ ] Implement resource pools
+   - [ ] Add size limits
+   - [ ] Use thread-local storage
+   - [ ] Clean up resources properly
+
+4. Testing
+   - [ ] Add error path tests
+   - [ ] Test resource cleanup
+   - [ ] Test concurrent access
+   - [ ] Add property-based tests
+
+5. Documentation
+   - [ ] Document safety requirements
+   - [ ] Document error cases
+   - [ ] Add usage examples
+   - [ ] Document thread safety

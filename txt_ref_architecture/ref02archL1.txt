@@ -1,0 +1,152 @@
+# ZIP-Revelio: High-Level Architecture 🏗️
+
+"Like a well-organized warehouse where multiple workers efficiently process packages in parallel, ZIP-Revelio handles ZIP files with speed and precision!"
+
+## System Overview
+```
+ZIP-Revelio
+    │
+    ├── CLI Interface
+    │   ├── Argument Parser (clap)
+    │   └── Progress Display (indicatif)
+    │
+    ├── ZIP Processor
+    │   ├── Memory-Mapped Reader
+    │   ├── Entry Processor
+    │   └── CRC32 Validator
+    │
+    ├── Memory Manager
+    │   ├── Buffer Pool
+    │   │   ├── Small Buffers (<64KB)
+    │   │   ├── Medium Buffers (<1MB)
+    │   │   └── Large Memory Maps (>1MB)
+    │   └── Resource Monitor
+    │
+    ├── Parallel Engine
+    │   ├── Thread Pool (rayon)
+    │   ├── Work Distributor
+    │   └── Progress Tracker
+    │
+    └── Report Generator
+        ├── Stats Collector
+        └── Report Formatter
+```
+
+## Key Design Decisions 🤔
+
+1. Memory Management Strategy
+   ```
+   File Size    Strategy          Buffer Type
+   < 64KB       Direct           Stack Buffer
+   64KB-1MB     Pool             Shared Buffer
+   > 1MB        Memory Map       File Mapping
+   ```
+
+2. Parallel Processing Approach
+   ```
+   ZIP File ──> Memory Map
+       │
+   Central Directory Read (Single Thread)
+       │
+   ┌────┴────┐
+   │Entry 1  │ Worker 1 ──> Buffer Pool
+   │Entry 2  │ Worker 2 ──> Buffer Pool
+   │Entry 3  │ Worker 3 ──> Buffer Pool
+   │Entry 4  │ Worker N ──> Buffer Pool
+   └────┬────┘
+        │
+   Stats Collection
+   ```
+
+3. Progress Tracking
+   ```
+   Entry Process ──> Atomic Counter ──> Progress Bar
+        │                │                  │
+        └── Parallel    Thread-Safe    Real-time
+            Tasks       Updates        Feedback
+   ```
+
+## Core Components 🔧
+
+1. CLI Interface
+   - Simple command: `cargo run -- input.zip output.txt`
+   - Optional thread count configuration
+   - Real-time progress with speed display
+   - Graceful Ctrl+C handling
+
+2. ZIP Processor
+   - Memory-mapped file access
+   - Parallel entry processing
+   - CRC32 validation
+   - Store/Deflate support
+
+3. Memory Manager
+   - Tiered buffer strategy
+   - Pre-allocated buffer pools
+   - Memory-mapped large files
+   - Resource monitoring
+
+4. Parallel Engine
+   - Rayon thread pool
+   - Work stealing scheduler
+   - Adaptive thread count
+   - Progress tracking
+
+5. Report Generator
+   ```
+   === ZIP Analysis Report ===
+   - Total size and compression
+   - Processing duration
+   - File type breakdown
+   - Method statistics
+   - File listing
+   ```
+
+## Performance Optimizations 🚀
+
+1. Memory Strategy
+   - Pre-allocated buffer pools
+   - Memory mapping for large files
+   - Buffer reuse
+   - Minimal copying
+
+2. Thread Management
+   ```rust
+   thread_count = min(
+       num_cpus::get(),
+       max(1, files.len() / 10)
+   )
+   ```
+
+3. I/O Optimization
+   - Memory mapping
+   - Batch processing
+   - Buffer pooling
+   - Minimal allocation
+
+## Error Handling Strategy 🛡️
+
+```
+Error Type          Action
+┌─────────────┐
+│File Error   │ → Skip & Continue
+├─────────────┤
+│Memory Error │ → Reduce Threads
+├─────────────┤
+│Fatal Error  │ → Stop & Report
+└─────────────┘
+```
+
+## Security Considerations 🔒
+
+1. Input Validation
+   - ZIP format verification
+   - ASCII filenames only
+   - 4GB file size limit
+   - Store/Deflate only
+
+2. Resource Protection
+   - Memory limits per thread
+   - Adaptive thread count
+   - Buffer pool limits
+   - Graceful shutdown

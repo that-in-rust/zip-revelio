@@ -16,10 +16,21 @@ parking_lot = "0.12"
 pin-project-lite = "0.2"
 futures = "0.3"
 ctrlc = "3.4"
+dashmap = "5.5"
+crossbeam = "0.8"
+memmap2 = "0.9"
+byte-unit = "5.1"
+crc32fast = "1.4"
+flate2 = "1.0"
+tempfile = "3.10"
 
 [dev-dependencies]
 tempfile = "3.10"
-criterion = "0.5"
+criterion = { version = "0.5", features = ["async_tokio"] }
+
+[[bench]]
+name = "zip_processing"
+harness = false
 
 [profile.release]
 opt-level = 3

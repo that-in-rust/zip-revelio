@@ -1,0 +1,374 @@
+# ZIP-Revelio: Implementation Details (L3) 🛠️
+
+## Project Structure 📁
+
+```
+zip-revelio/
+├── src/
+│   ├── main.rs           # CLI entry point
+│   ├── lib.rs            # Core library
+│   ├── zip/             # ZIP processing
+│   │   ├── mod.rs
+│   │   ├── entry.rs     # ZIP entry handling
+│   │   ├── reader.rs    # Memory-mapped reader
+│   │   └── error.rs     # ZIP-specific errors
+│   ├── buffer/          # Memory management
+│   │   ├── mod.rs
+│   │   ├── pool.rs      # Buffer pool
+│   │   └── mmap.rs      # Memory mapping
+│   ├── worker/          # Parallel processing
+│   │   ├── mod.rs
+│   │   ├── pool.rs      # Thread pool
+│   │   └── task.rs      # Work units
+│   ├── report/          # Report generation
+│   │   ├── mod.rs
+│   │   ├── stats.rs     # Statistics
+│   │   └── format.rs    # Report formatting
+│   └── utils/           # Common utilities
+│       ├── mod.rs
+│       ├── progress.rs  # Progress tracking
+│       └── error.rs     # Error handling
+├── benches/             # Benchmarks
+│   └── zip_processing.rs
+├── test_data/          # Test files
+│   ├── README.md
+│   ├── 1mb.zip
+│   ├── 10mb.zip
+│   └── generate_test_data.py
+└── Cargo.toml
+```
+
+## Module Implementations 🔧
+
+1. ZIP Processing (`src/zip/`)
+
+```rust
+// entry.rs
+pub struct ZipEntry {
+    header: LocalFileHeader,
+    data_descriptor: Option<DataDescriptor>,
+    file_data: Vec<u8>,
+}
+
+impl ZipEntry {
+    async fn process(&self, buffer: &mut Buffer) -> Result<ProcessedEntry, ZipError> {
+        self.validate()?;
+        match self.header.compression_method {
+            0 => { // Store
+                buffer.copy_from_slice(&self.file_data);
+                self.validate_crc32(buffer)?;
+            }
+            8 => { // Deflate
+                let mut decoder = DeflateDecoder::new(&self.file_data[..]);
+                decoder.read_exact(buffer)?;
+                self.validate_crc32(buffer)?;
+            }
+            _ => return Err(ZipError::UnsupportedMethod(..)),
+        }
+        Ok(ProcessedEntry::new(self))
+    }
+}
+
+// reader.rs
+pub struct ZipReader {
+    mmap: Mmap,
+    central_directory_offset: u64,
+}
+
+impl ZipReader {
+    pub fn entries(&self) -> impl Iterator<Item = Result<ZipEntry, ZipError>> + '_ {
+        ZipEntryIterator {
+            reader: self,
+            current_offset: self.central_directory_offset,
+        }
+    }
+}
+```
+
+2. Buffer Management (`src/buffer/`)
+
+```rust
+// pool.rs
+pub struct BufferPool {
+    small_pool: ArrayQueue<Vec<u8>>,
+    medium_pool: ArrayQueue<Vec<u8>>,
+    large_maps: RwLock<HashMap<usize, MemoryMap>>,
+    config: BufferConfig,
+    next_map_id: AtomicUsize,
+}
+
+impl BufferPool {
+    pub fn acquire(&self, size: usize) -> Result<Buffer, ZipError> {
+        match size {
+            s if s <= self.config.small_size => {
+                self.small_pool.pop()
+                    .map(Buffer::Small)
+                    .ok_or(ZipError::NoBufferAvailable)
+            }
+            s if s <= self.config.medium_size => {
+                self.medium_pool.pop()
+                    .map(Buffer::Medium)
+                    .ok_or(ZipError::NoBufferAvailable)
+            }
+            s => {
+                let id = self.next_map_id.fetch_add(1, Ordering::SeqCst);
+                let map = MemoryMap::new(s)?;
+                self.large_maps.write().unwrap().insert(id, map);
+                Ok(Buffer::Large(id))
+            }
+        }
+    }
+}
+```
+
+3. Worker Management (`src/worker/`)
+
+```rust
+// pool.rs
+pub struct WorkerPool {
+    pool: rayon::ThreadPool,
+    buffer_pool: Arc<BufferPool>,
+    progress: Arc<Progress>,
+}
+
+impl WorkerPool {
+    pub async fn process_entries(&self, entries: Vec<Arc<ZipEntry>>) 
+        -> Result<Vec<Task>, ZipError> 
+    {
+        let results = Arc::new(Mutex::new(Vec::new()));
+        
+        self.pool.install(|| {
+            entries.par_iter().try_for_each(|entry| {
+                let buffer = self.buffer_pool.acquire(
+                    entry.header.uncompressed_size as usize
+                )?;
+                
+                let task = Task::new(entry.clone(), buffer);
+                match futures::executor::block_on(task.process()) {
+                    Ok(processed_task) => {
+                        results.lock().push(processed_task);
+                        self.progress.update(entry.header.compressed_size);
+                        Ok(())
+                    }
+                    Err(e) => Err(e),
+                }
+            })
+        })?;
+        
+        Ok(Arc::try_unwrap(results)
+            .unwrap()
+            .into_inner()
+            .into_iter()
+            .collect())
+    }
+}
+```
+
+4. Progress Tracking (`src/utils/`)
+
+```rust
+// progress.rs
+pub struct Progress {
+    bar: ProgressBar,
+    processed: AtomicU64,
+    total: u64,
+    speed: RwLock<f64>,
+    last_update: AtomicU64,
+    update_interval: Duration,
+}
+
+impl Progress {
+    pub fn update(&self, bytes: u64) {
+        let processed = self.processed.fetch_add(bytes, Ordering::Relaxed);
+        let now = self.start.elapsed().as_millis() as u64;
+        
+        if now - self.last_update.load(Ordering::Relaxed) 
+            >= self.update_interval.as_millis() as u64 
+        {
+            self.bar.set_position(processed);
+            self.update_speed(processed, now);
+            self.last_update.store(now, Ordering::Relaxed);
+        }
+    }
+}
+```
+
+5. Report Generation (`src/report/`)
+
+```rust
+// stats.rs
+pub struct Stats {
+    total_size: AtomicU64,
+    compressed_size: AtomicU64,
+    file_count: AtomicUsize,
+    methods: DashMap<u16, usize>,
+    file_types: DashMap<String, usize>,
+    files: RwLock<BTreeSet<String>>,
+}
+
+// format.rs
+pub struct ReportFormatter {
+    stats: Arc<Stats>,
+}
+
+impl ReportFormatter {
+    pub fn generate(&self) -> String {
+        let mut report = String::new();
+        writeln!(report, "=== ZIP Analysis Report ===\n").unwrap();
+        
+        let total = Byte::from_u128(
+            self.stats.total_size.load(Ordering::Relaxed) as u128
+        ).unwrap().get_appropriate_unit(true);
+        
+        writeln!(report, "Total size: {}", total).unwrap();
+        // ... additional report formatting
+    }
+}
+```
+
+## Testing Strategy 🧪
+
+1. Unit Tests
+
+```rust
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_buffer_pool() {
+        let config = BufferConfig::default();
+        let pool = BufferPool::new(config);
+        
+        // Test small buffer
+        let buf1 = pool.acquire(1024).unwrap();
+        assert!(matches!(buf1, Buffer::Small(_)));
+        
+        // Test medium buffer
+        let buf2 = pool.acquire(100_000).unwrap();
+        assert!(matches!(buf2, Buffer::Medium(_)));
+        
+        // Test large buffer
+        let buf3 = pool.acquire(2_000_000).unwrap();
+        assert!(matches!(buf3, Buffer::Large(_)));
+    }
+}
+```
+
+2. Integration Tests
+
+```rust
+#[tokio::test]
+async fn test_zip_processing() {
+    let config = Config::default();
+    let analyzer = Analyzer::new(config);
+    
+    let result = analyzer
+        .analyze("test_data/1mb.zip", "test_data/report.txt")
+        .await;
+        
+    assert!(result.is_ok());
+    
+    let report = std::fs::read_to_string("test_data/report.txt").unwrap();
+    assert!(report.contains("=== ZIP Analysis Report ==="));
+}
+```
+
+3. Benchmarks
+
+```rust
+use criterion::{black_box, criterion_group, criterion_main, Criterion};
+
+pub fn zip_processing_benchmark(c: &mut Criterion) {
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    
+    c.bench_function("process_1mb_zip", |b| {
+        b.to_async(&runtime).iter(|| async {
+            process_zip(
+                black_box(PathBuf::from("test_data/1mb.zip")),
+                black_box(PathBuf::from("test_data/report.txt"))
+            ).await
+        });
+    });
+}
+
+criterion_group!(benches, zip_processing_benchmark);
+criterion_main!(benches);
+```
+
+## Error Handling 🛡️
+
+1. Error Types
+
+```rust
+#[derive(Error, Debug)]
+pub enum ZipError {
+    #[error("I/O error: {0}")]
+    Io(#[from] std::io::Error),
+    
+    #[error("Invalid ZIP format: {0}")]
+    Format(String),
+    
+    #[error("Unsupported compression method: {0}")]
+    UnsupportedMethod(u16),
+    
+    #[error("Non-ASCII filename")]
+    NonAsciiName,
+    
+    #[error("File too large (>4GB)")]
+    FileTooLarge,
+    
+    #[error("Memory error: {0}")]
+    Memory(String),
+    
+    #[error("No buffer available")]
+    NoBufferAvailable,
+    
+    #[error("CRC32 mismatch")]
+    Crc32Mismatch,
+}
+```
+
+2. Error Recovery
+
+```rust
+pub struct ErrorHandler {
+    max_retries: usize,
+}
+
+impl ErrorHandler {
+    pub fn handle(&self, error: &ZipError) -> Action {
+        match error {
+            ZipError::Io(_) => Action::SkipFile,
+            ZipError::Memory(_) => Action::ReduceThreads,
+            ZipError::Format(_) => Action::StopProcessing,
+            ZipError::NoBufferAvailable => Action::Retry,
+            _ => Action::LogAndContinue,
+        }
+    }
+    
+    pub fn should_retry(&self, attempts: usize) -> bool {
+        attempts < self.max_retries
+    }
+}
+```
+
+## Performance Optimizations 🚀
+
+1. Memory Management
+   - Pre-allocated buffer pools
+   - Memory-mapped large files
+   - Buffer reuse strategy
+   - Minimal copying
+
+2. Parallel Processing
+   - Rayon-based work stealing
+   - Adaptive thread count
+   - Lock-free progress tracking
+   - Efficient task distribution
+
+3. I/O Handling
+   - Memory-mapped file access
+   - Batch processing
+   - Minimal system calls
+   - Efficient buffer management

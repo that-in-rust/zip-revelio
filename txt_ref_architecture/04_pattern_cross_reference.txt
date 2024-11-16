@@ -1,0 +1,201 @@
+# ZIP-Revelio Pattern Cross-Reference Guide 🔄
+
+This document cross-references patterns between the architecture and anti-patterns guide.
+
+## Memory Safety Patterns
+
+1. Memory Map Safety ✅
+```rust
+// Anti-Pattern (avoidRustBugs.txt):
+let mmap = unsafe { Mmap::map(&file)? };
+
+// Architecture Implementation (03_resource_management.txt):
+pub struct MemoryMap {
+    map: Mmap,
+    is_valid: AtomicBool,
+    size: usize,
+}
+
+impl MemoryMap {
+    pub fn new(file: &File, size: usize) -> Result<Self, BufferError> {
+        Buffer::validate_size(size)?;
+        let map = unsafe {
+            MmapOptions::new()
+                .populate()
+                .map(file)?
+        };
+        Ok(Self {
+            map,
+            is_valid: AtomicBool::new(true),
+            size,
+        })
+    }
+}
+```
+
+2. Resource Cleanup ✅
+```rust
+// Anti-Pattern (avoidRustBugs.txt):
+fn cleanup(&mut self) {
+    self.free_resources();
+}
+
+// Architecture Implementation (03_resource_management.txt):
+impl Drop for Buffer {
+    fn drop(&mut self) {
+        self.is_valid.store(false, Ordering::Release);
+        if let Err(e) = self.cleanup() {
+            eprintln!("Cleanup failed: {}", e);
+        }
+    }
+}
+```
+
+3. Thread-Local Storage ✅
+```rust
+// Anti-Pattern (avoidRustBugs.txt):
+static mut GLOBAL_POOL: Option<BufferPool> = None;
+
+// Architecture Implementation (01_system_overview.txt):
+thread_local! {
+    static BUFFER_POOL: RefCell<Option<Arc<BufferPool>>> = RefCell::new(None);
+}
+```
+
+## Error Handling Patterns
+
+1. Error Propagation ✅
+```rust
+// Anti-Pattern (avoidRustBugs.txt):
+let buffer = pool.acquire(1024).unwrap();
+
+// Architecture Implementation (02_error_handling.txt):
+let buffer = pool.acquire(1024)
+    .map_err(|e| ZipError::Memory(e.to_string()))?;
+```
+
+2. Error Context ✅
+```rust
+// Anti-Pattern (avoidRustBugs.txt):
+return Err("Failed".into());
+
+// Architecture Implementation (02_error_handling.txt):
+return Err(ZipError::Format(
+    format!("Failed to process {}: {}", entry.name, e)
+));
+```
+
+## Resource Management Patterns
+
+1. Buffer Pool ✅
+```rust
+// Anti-Pattern (avoidRustBugs.txt):
+let buffer = vec![0; size];
+
+// Architecture Implementation (03_resource_management.txt):
+match size {
+    s if s <= SMALL_BUFFER_SIZE => self.acquire_small(),
+    s if s <= MEDIUM_BUFFER_SIZE => self.acquire_medium(),
+    _ => self.acquire_large(size),
+}
+```
+
+2. Thread Pool ✅
+```rust
+// Anti-Pattern (avoidRustBugs.txt):
+let thread_count = num_cpus::get();
+
+// Architecture Implementation (03_resource_management.txt):
+let thread_count = config.thread_count.unwrap_or_else(|| {
+    std::cmp::min(num_cpus::get(), MAX_THREADS)
+});
+```
+
+## Testing Patterns
+
+1. Error Testing ✅
+```rust
+// Anti-Pattern (avoidRustBugs.txt):
+#[test]
+fn test_buffer() {
+    let buf = pool.acquire(1024).unwrap();
+}
+
+// Architecture Implementation (02_error_handling.txt):
+#[test]
+fn test_buffer() -> Result<()> {
+    let buf = pool.acquire(1024)
+        .map_err(|e| anyhow::anyhow!("Failed: {}", e))?;
+    Ok(())
+}
+```
+
+2. Resource Cleanup Testing ✅
+```rust
+// Anti-Pattern (avoidRustBugs.txt):
+drop(resource); // No verification
+
+// Architecture Implementation (03_resource_management.txt):
+#[test]
+fn test_cleanup() -> Result<()> {
+    let buffer = create_test_buffer()?;
+    drop(buffer);
+    assert_resources_cleaned_up()?;
+    Ok(())
+}
+```
+
+## Documentation Patterns
+
+1. Safety Documentation ✅
+```rust
+// Anti-Pattern (avoidRustBugs.txt):
+pub fn unsafe_operation();
+
+// Architecture Implementation (01_system_overview.txt):
+/// # Safety
+/// - Buffer must be released back to the pool
+/// - Do not use after dropping the pool
+/// - Do not exceed MAX_BUFFER_SIZE
+pub fn acquire(&self, size: usize) -> Result<Buffer, BufferError>
+```
+
+## Pattern Coverage Matrix
+
+| Pattern Category     | Anti-Pattern | Architecture | Status |
+|---------------------|--------------|--------------|---------|
+| Memory Map Safety   | ✓            | ✓            | ✅      |
+| Resource Cleanup    | ✓            | ✓            | ✅      |
+| Thread-Local State  | ✓            | ✓            | ✅      |
+| Error Propagation   | ✓            | ✓            | ✅      |
+| Buffer Management   | ✓            | ✓            | ✅      |
+| Thread Pool         | ✓            | ✓            | ✅      |
+| Testing            | ✓            | ✓            | ✅      |
+| Documentation      | ✓            | ✓            | ✅      |
+
+## Implementation Checklist
+
+1. Memory Safety
+   - [ ] Implement MemoryMap with validation
+   - [ ] Add Drop implementations
+   - [ ] Use thread-local storage
+
+2. Error Handling
+   - [ ] Create unified error type
+   - [ ] Add error context
+   - [ ] Implement From traits
+
+3. Resource Management
+   - [ ] Implement buffer pool
+   - [ ] Configure thread pool
+   - [ ] Add resource limits
+
+4. Testing
+   - [ ] Add error path tests
+   - [ ] Test resource cleanup
+   - [ ] Test concurrent access
+
+5. Documentation
+   - [ ] Add safety docs
+   - [ ] Document error cases
+   - [ ] Add usage examples

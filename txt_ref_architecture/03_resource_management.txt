@@ -1,0 +1,286 @@
+# ZIP-Revelio Resource Management Guide 🔧
+
+## Buffer Management
+
+1. Buffer Types and Sizes:
+```rust
+pub const SMALL_BUFFER_SIZE: usize = 64 * 1024;    // 64KB
+pub const MEDIUM_BUFFER_SIZE: usize = 1024 * 1024; // 1MB
+pub const MAX_BUFFER_SIZE: usize = 1024 * 1024 * 1024; // 1GB
+
+pub enum Buffer {
+    Small(Vec<u8>),     // Stack optimized
+    Medium(Vec<u8>),    // Heap pooled
+    Large(usize),       // Memory mapped
+}
+
+impl Buffer {
+    pub fn validate_size(size: usize) -> Result<(), BufferError> {
+        if size > MAX_BUFFER_SIZE {
+            return Err(BufferError::InvalidSize(size));
+        }
+        Ok(())
+    }
+}
+```
+
+2. Buffer Pool Management:
+```rust
+pub struct BufferPool {
+    small_pool: ArrayQueue<Vec<u8>>,
+    medium_pool: ArrayQueue<Vec<u8>>,
+    large_maps: RwLock<HashMap<usize, MemoryMap>>,
+    metrics: Arc<BufferMetrics>,
+}
+
+impl BufferPool {
+    pub fn acquire(&self, size: usize) -> Result<Buffer, BufferError> {
+        Buffer::validate_size(size)?;
+        match size {
+            s if s <= SMALL_BUFFER_SIZE => self.acquire_small(),
+            s if s <= MEDIUM_BUFFER_SIZE => self.acquire_medium(),
+            _ => self.acquire_large(size),
+        }
+    }
+    
+    pub fn release(&self, buffer: &Buffer) -> Result<(), BufferError> {
+        match buffer {
+            Buffer::Small(buf) if buf.capacity() == SMALL_BUFFER_SIZE => {
+                self.release_small(buf)
+            }
+            Buffer::Medium(buf) if buf.capacity() == MEDIUM_BUFFER_SIZE => {
+                self.release_medium(buf)
+            }
+            Buffer::Large(id) => self.release_large(*id),
+            _ => Ok(()),
+        }
+    }
+}
+```
+
+## Memory Map Management
+
+1. Memory Map Validation:
+```rust
+pub struct MemoryMap {
+    map: Mmap,
+    is_valid: AtomicBool,
+    size: usize,
+}
+
+impl MemoryMap {
+    pub fn new(file: &File, size: usize) -> Result<Self, BufferError> {
+        Buffer::validate_size(size)?;
+        
+        let map = unsafe {
+            MmapOptions::new()
+                .populate() // Pre-fault pages
+                .map(file)
+                .map_err(|e| BufferError::MapFailed(e.to_string()))?
+        };
+        
+        Ok(Self {
+            map,
+            is_valid: AtomicBool::new(true),
+            size,
+        })
+    }
+    
+    pub fn validate(&self) -> Result<(), BufferError> {
+        if !self.is_valid.load(Ordering::Acquire) {
+            return Err(BufferError::MapFailed("Map is no longer valid".into()));
+        }
+        Ok(())
+    }
+}
+
+impl Drop for MemoryMap {
+    fn drop(&mut self) {
+        self.is_valid.store(false, Ordering::Release);
+    }
+}
+```
+
+## Thread Pool Management
+
+1. Thread Pool Configuration:
+```rust
+pub const MAX_THREADS: usize = 16;
+pub const MIN_STACK_SIZE: usize = 8 * 1024 * 1024; // 8MB
+
+pub struct WorkerConfig {
+    pub thread_count: Option<usize>,
+    pub stack_size: usize,
+}
+
+impl Default for WorkerConfig {
+    fn default() -> Self {
+        Self {
+            thread_count: None,
+            stack_size: MIN_STACK_SIZE,
+        }
+    }
+}
+
+pub struct WorkerPool {
+    pool: rayon::ThreadPool,
+    metrics: Arc<WorkerMetrics>,
+}
+
+impl WorkerPool {
+    pub fn new(config: WorkerConfig) -> Result<Self, WorkerError> {
+        let thread_count = config.thread_count.unwrap_or_else(|| {
+            std::cmp::min(num_cpus::get(), MAX_THREADS)
+        });
+        
+        let pool = ThreadPoolBuilder::new()
+            .num_threads(thread_count)
+            .stack_size(config.stack_size)
+            .build()
+            .map_err(|e| WorkerError::ThreadPoolError(e.to_string()))?;
+            
+        Ok(Self {
+            pool,
+            metrics: Arc::new(WorkerMetrics::default()),
+        })
+    }
+}
+```
+
+## Resource Metrics
+
+1. Buffer Metrics:
+```rust
+pub struct BufferMetrics {
+    small_allocated: AtomicUsize,
+    medium_allocated: AtomicUsize,
+    large_allocated: AtomicUsize,
+    allocation_failures: AtomicUsize,
+}
+
+impl BufferMetrics {
+    pub fn record_allocation(&self, buffer: &Buffer) {
+        match buffer {
+            Buffer::Small(_) => 
+                self.small_allocated.fetch_add(1, Ordering::Relaxed),
+            Buffer::Medium(_) => 
+                self.medium_allocated.fetch_add(1, Ordering::Relaxed),
+            Buffer::Large(_) => 
+                self.large_allocated.fetch_add(1, Ordering::Relaxed),
+        };
+    }
+}
+```
+
+2. Worker Metrics:
+```rust
+pub struct WorkerMetrics {
+    active_threads: AtomicUsize,
+    completed_tasks: AtomicUsize,
+    failed_tasks: AtomicUsize,
+}
+
+impl WorkerMetrics {
+    pub fn record_task_completion(&self, result: Result<(), WorkerError>) {
+        match result {
+            Ok(()) => self.completed_tasks.fetch_add(1, Ordering::Relaxed),
+            Err(_) => self.failed_tasks.fetch_add(1, Ordering::Relaxed),
+        };
+    }
+}
+```
+
+## Resource Cleanup
+
+1. Cleanup Order:
+```rust
+impl Drop for ZipProcessor {
+    fn drop(&mut self) {
+        // Order matters:
+        // 1. Stop accepting new work
+        self.worker_pool.shutdown();
+        
+        // 2. Wait for in-progress work
+        self.worker_pool.wait_completion();
+        
+        // 3. Release buffers
+        self.buffer_pool.cleanup();
+        
+        // 4. Close files
+        self.close_files();
+    }
+}
+```
+
+2. Error Handling in Cleanup:
+```rust
+impl BufferPool {
+    pub fn cleanup(&self) {
+        // Best effort cleanup
+        if let Ok(mut maps) = self.large_maps.write() {
+            maps.clear();
+        }
+        
+        while let Some(_) = self.small_pool.pop() {}
+        while let Some(_) = self.medium_pool.pop() {}
+    }
+}
+```
+
+## Resource Limits
+
+1. Size Limits:
+```rust
+pub const MAX_ZIP_SIZE: u64 = 4 * 1024 * 1024 * 1024; // 4GB
+pub const MAX_ENTRY_SIZE: u64 = 1024 * 1024 * 1024;   // 1GB
+pub const MAX_ENTRY_COUNT: usize = 1_000_000;         // 1M entries
+```
+
+2. Pool Limits:
+```rust
+pub const MAX_SMALL_BUFFERS: usize = 1024;
+pub const MAX_MEDIUM_BUFFERS: usize = 128;
+pub const MAX_LARGE_MAPS: usize = 16;
+```
+
+## Resource Validation
+
+1. Input Validation:
+```rust
+impl ZipProcessor {
+    pub fn process_file(&self, path: &Path) -> Result<Stats, ZipError> {
+        let metadata = path.metadata()
+            .map_err(|e| ZipError::Io(e))?;
+            
+        if metadata.len() > MAX_ZIP_SIZE {
+            return Err(ZipError::Resource(
+                format!("File too large: {}", metadata.len())
+            ));
+        }
+        
+        // Continue processing...
+        Ok(Stats::default())
+    }
+}
+```
+
+2. Resource Validation:
+```rust
+impl BufferPool {
+    fn validate_resources(&self) -> Result<(), BufferError> {
+        let small_count = self.small_pool.len();
+        let medium_count = self.medium_pool.len();
+        let large_count = self.large_maps.read()
+            .map_err(|_| BufferError::LockError)?
+            .len();
+            
+        if small_count > MAX_SMALL_BUFFERS ||
+           medium_count > MAX_MEDIUM_BUFFERS ||
+           large_count > MAX_LARGE_MAPS {
+            return Err(BufferError::ResourceExhausted);
+        }
+        
+        Ok(())
+    }
+}
+```
