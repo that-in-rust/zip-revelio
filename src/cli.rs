@@ -4,28 +4,23 @@ use crate::Config;
 
 /// High-performance ZIP file analyzer
 #[derive(Parser, Debug)]
-#[clap(
-    name = "zip-revelio",
-    version,
-    author,
-    about = "Analyze ZIP files with parallel processing power"
-)]
+#[clap(author, version, about)]
 pub struct Cli {
     /// Input ZIP file to analyze
-    #[clap(parse(from_os_str))]
+    #[clap(value_parser)]
     pub input: PathBuf,
 
     /// Output report file
-    #[clap(parse(from_os_str), short, long, default_value = "report.txt")]
+    #[clap(short, long, value_parser, default_value = "report.txt")]
     pub output: PathBuf,
 
     /// Number of processing threads (default: number of CPU cores)
-    #[clap(short, long)]
-    pub threads: Option<usize>,
+    #[clap(short, long, default_value_t = num_cpus::get())]
+    pub threads: usize,
 
     /// Buffer size in KB (default: 64)
-    #[clap(short, long)]
-    pub buffer_size: Option<usize>,
+    #[clap(short, long, default_value = "64")]
+    pub buffer_size: usize,
 
     /// Disable progress bar
     #[clap(short = 'P', long)]
@@ -40,8 +35,8 @@ pub struct Cli {
     pub max_memory: usize,
 
     /// Compression methods to analyze (comma-separated)
-    #[clap(short, long, use_delimiter = true)]
-    pub methods: Option<Vec<String>>,
+    #[clap(short, long, value_delimiter = ',')]
+    pub methods: Vec<String>,
 
     /// Generate detailed report
     #[clap(short, long)]
@@ -54,12 +49,12 @@ impl Cli {
         Config {
             input_path: self.input,
             output_path: self.output,
-            thread_count: self.threads.unwrap_or_else(num_cpus::get),
-            buffer_size: self.buffer_size.unwrap_or(64) * 1024,
+            thread_count: self.threads,
+            buffer_size: self.buffer_size * 1024,
             show_progress: !self.no_progress,
             verbose: self.verbose,
             max_memory: self.max_memory * 1024 * 1024,
-            methods: self.methods,
+            methods: Some(self.methods),
             detailed: self.detailed,
         }
     }
@@ -75,23 +70,19 @@ impl Cli {
         }
 
         // Check thread count
-        if let Some(threads) = self.threads {
-            if threads == 0 {
-                return Err("Thread count must be greater than 0".to_string());
-            }
-            if threads > 256 {
-                return Err("Thread count must not exceed 256".to_string());
-            }
+        if self.threads == 0 {
+            return Err("Thread count must be greater than 0".to_string());
+        }
+        if self.threads > 256 {
+            return Err("Thread count must not exceed 256".to_string());
         }
 
         // Check buffer size
-        if let Some(size) = self.buffer_size {
-            if size == 0 {
-                return Err("Buffer size must be greater than 0".to_string());
-            }
-            if size > 1024 * 1024 {  // 1GB
-                return Err("Buffer size must not exceed 1GB".to_string());
-            }
+        if self.buffer_size == 0 {
+            return Err("Buffer size must be greater than 0".to_string());
+        }
+        if self.buffer_size > 1024 * 1024 {  // 1GB
+            return Err("Buffer size must not exceed 1GB".to_string());
         }
 
         // Check memory limit
@@ -103,12 +94,10 @@ impl Cli {
         }
 
         // Validate compression methods
-        if let Some(ref methods) = self.methods {
-            for method in methods {
-                match method.to_lowercase().as_str() {
-                    "store" | "deflate" => continue,
-                    _ => return Err(format!("Unsupported compression method: {}", method)),
-                }
+        for method in &self.methods {
+            match method.to_lowercase().as_str() {
+                "store" | "deflate" => continue,
+                _ => return Err(format!("Unsupported compression method: {}", method)),
             }
         }
 
@@ -143,10 +132,10 @@ mod tests {
         ];
 
         let cli = Cli::try_parse_from(args).unwrap();
-        assert_eq!(cli.threads, Some(4));
-        assert_eq!(cli.buffer_size, Some(128));
+        assert_eq!(cli.threads, 4);
+        assert_eq!(cli.buffer_size, 128);
         assert_eq!(cli.max_memory, 2048);
-        assert_eq!(cli.methods, Some(vec!["store".to_string(), "deflate".to_string()]));
+        assert_eq!(cli.methods, vec!["store".to_string(), "deflate".to_string()]);
         assert!(cli.detailed);
     }
 
@@ -159,12 +148,12 @@ mod tests {
         let cli = Cli {
             input: input_path,
             output: PathBuf::from("report.txt"),
-            threads: Some(4),
-            buffer_size: Some(128),
+            threads: 4,
+            buffer_size: 128,
             no_progress: false,
             verbose: true,
             max_memory: 2048,
-            methods: Some(vec!["store".to_string()]),
+            methods: vec!["store".to_string()],
             detailed: true,
         };
 
@@ -188,24 +177,24 @@ mod tests {
         let cli = Cli {
             input: input_path.clone(),
             output: PathBuf::from("report.txt"),
-            threads: Some(4),
-            buffer_size: Some(128),
+            threads: 4,
+            buffer_size: 128,
             no_progress: false,
             verbose: false,
             max_memory: 2048,
-            methods: Some(vec!["store".to_string()]),
+            methods: vec!["store".to_string()],
             detailed: false,
         };
         assert!(cli.validate().is_ok());
 
         // Invalid thread count
         let mut invalid = cli.clone();
-        invalid.threads = Some(0);
+        invalid.threads = 0;
         assert!(invalid.validate().is_err());
 
         // Invalid buffer size
         let mut invalid = cli.clone();
-        invalid.buffer_size = Some(0);
+        invalid.buffer_size = 0;
         assert!(invalid.validate().is_err());
 
         // Invalid memory limit
@@ -215,7 +204,7 @@ mod tests {
 
         // Invalid compression method
         let mut invalid = cli;
-        invalid.methods = Some(vec!["invalid".to_string()]);
+        invalid.methods = vec!["invalid".to_string()];
         assert!(invalid.validate().is_err());
     }
 }

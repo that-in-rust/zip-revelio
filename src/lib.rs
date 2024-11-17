@@ -20,6 +20,7 @@ pub mod scheduler;
 pub mod memory;
 pub mod thread_safety;
 pub mod error_handling;
+pub mod file_handling;
 
 pub use error::ZipError;
 

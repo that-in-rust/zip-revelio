@@ -2,11 +2,13 @@ use std::{
     error::Error,
     fmt::{self, Display},
     io,
-    sync::Arc,
+    sync::{Arc, RwLock},
     time::Duration,
 };
 use parking_lot::Mutex;
 use tokio::sync::broadcast;
+use std::collections::HashMap;
+use std::panic;
 
 /// Error context for detailed error information
 #[derive(Debug, Clone)]
@@ -110,17 +112,70 @@ impl ErrorHandler {
     }
 }
 
+/// State recovery handler
+#[derive(Debug)]
+pub struct StateRecovery {
+    /// Panic hook
+    panic_hook: Box<dyn Fn(&panic::PanicInfo) + Send + Sync + 'static>,
+    /// Recovery state
+    state: Arc<RwLock<HashMap<String, Vec<u8>>>>,
+}
+
+impl StateRecovery {
+    /// Creates a new state recovery handler
+    pub fn new() -> Self {
+        let state = Arc::new(RwLock::new(HashMap::new()));
+        let state_clone = Arc::clone(&state);
+        
+        let panic_hook = Box::new(move |panic_info: &panic::PanicInfo| {
+            let state = state_clone.read();
+            if let Some(location) = panic_info.location() {
+                eprintln!("Panic occurred in file '{}' at line {}", location.file(), location.line());
+            }
+            eprintln!("Recovered state contains {} items", state.len());
+        });
+        
+        Self {
+            panic_hook,
+            state,
+        }
+    }
+
+    /// Installs panic hook
+    pub fn install(&self) {
+        let hook = self.panic_hook.clone();
+        panic::set_hook(Box::new(move |info| hook(info)));
+    }
+
+    /// Saves state for recovery
+    pub fn save_state(&self, key: String, value: Vec<u8>) {
+        self.state.write().insert(key, value);
+    }
+
+    /// Recovers saved state
+    pub fn recover_state(&self, key: &str) -> Option<Vec<u8>> {
+        self.state.read().get(key).cloned()
+    }
+
+    /// Cleans up state
+    pub fn cleanup(&self) {
+        self.state.write().clear();
+    }
+}
+
 /// Error recovery executor
 #[derive(Debug)]
 pub struct RecoveryExecutor {
     /// Error handler
     handler: Arc<ErrorHandler>,
+    /// State recovery handler
+    state_recovery: Arc<StateRecovery>,
 }
 
 impl RecoveryExecutor {
     /// Creates a new recovery executor
-    pub fn new(handler: Arc<ErrorHandler>) -> Self {
-        Self { handler }
+    pub fn new(handler: Arc<ErrorHandler>, state_recovery: Arc<StateRecovery>) -> Self {
+        Self { handler, state_recovery }
     }
 
     /// Executes an operation with recovery
@@ -230,8 +285,10 @@ mod tests {
                 delay: Duration::from_millis(100),
             },
         ));
+        let state_recovery = Arc::new(StateRecovery::new());
+        state_recovery.install();
         
-        let executor = RecoveryExecutor::new(Arc::clone(&handler));
+        let executor = RecoveryExecutor::new(Arc::clone(&handler), Arc::clone(&state_recovery));
         let mut attempts = 0;
         
         let result = executor.execute(|| {

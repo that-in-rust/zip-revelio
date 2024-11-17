@@ -1,7 +1,12 @@
 use std::path::Path;
+use std::time::Duration;
+use std::collections::HashMap;
 use tokio::fs::File;
 use tokio::io::AsyncWriteExt;
 use std::sync::Arc;
+use chrono::Local;
+use indicatif::{ProgressBar, ProgressStyle};
+use serde_json::json;
 
 use crate::{stats::Stats, Result};
 

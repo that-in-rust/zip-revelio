@@ -4,7 +4,7 @@ use std::{
     time::Duration,
 };
 use dashmap::DashMap;
-use parking_lot::{Mutex, RwLock, RwLockUpgradableReadGuard};
+use parking_lot::{Mutex, RwLock, RwLockUpgradableReadGuard, Condvar};
 use tokio::sync::Semaphore;
 
 use crate::{
@@ -15,38 +15,38 @@ use crate::{
 /// Thread-safe counter with overflow protection
 #[derive(Debug)]
 pub struct SafeCounter {
-    value: AtomicUsize,
+    value: Mutex<usize>,
     max: usize,
 }
 
 impl SafeCounter {
     pub fn new(max: usize) -> Self {
         Self {
-            value: AtomicUsize::new(0),
+            value: Mutex::new(0),
             max,
         }
     }
 
     pub fn increment(&self) -> Result<usize> {
-        let prev = self.value.fetch_add(1, Ordering::SeqCst);
-        if prev >= self.max {
-            self.value.fetch_sub(1, Ordering::SeqCst);
+        let mut value = self.value.lock();
+        if *value >= self.max {
             return Err(ZipError::ThreadSafety("Counter overflow".into()));
         }
-        Ok(prev + 1)
+        *value += 1;
+        Ok(*value)
     }
 
     pub fn decrement(&self) -> Result<usize> {
-        let prev = self.value.fetch_sub(1, Ordering::SeqCst);
-        if prev == 0 {
-            self.value.fetch_add(1, Ordering::SeqCst);
+        let mut value = self.value.lock();
+        if *value == 0 {
             return Err(ZipError::ThreadSafety("Counter underflow".into()));
         }
-        Ok(prev - 1)
+        *value -= 1;
+        Ok(*value)
     }
 
     pub fn get(&self) -> usize {
-        self.value.load(Ordering::SeqCst)
+        *self.value.lock()
     }
 }
 
@@ -97,6 +97,7 @@ pub struct SafeQueue<T> {
     inner: Mutex<Vec<T>>,
     capacity: usize,
     semaphore: Arc<Semaphore>,
+    notify: Condvar,
 }
 
 impl<T> SafeQueue<T> {
@@ -105,6 +106,7 @@ impl<T> SafeQueue<T> {
             inner: Mutex::new(Vec::with_capacity(capacity)),
             capacity,
             semaphore: Arc::new(Semaphore::new(capacity)),
+            notify: Condvar::new(),
         }
     }
 
@@ -119,6 +121,7 @@ impl<T> SafeQueue<T> {
         }
         
         queue.push(item);
+        self.notify.notify_one();
         Ok(())
     }
 
@@ -129,6 +132,17 @@ impl<T> SafeQueue<T> {
             self.semaphore.add_permits(1);
         }
         item
+    }
+
+    pub fn wait_pop(&self, timeout: Duration) -> Result<Option<T>> {
+        let mut queue = self.inner.lock();
+        let result = self.notify.wait_for(&mut queue, timeout);
+        
+        if !result.timed_out() {
+            Ok(queue.pop())
+        } else {
+            Ok(None)
+        }
     }
 
     pub fn len(&self) -> usize {
@@ -144,7 +158,7 @@ impl<T> SafeQueue<T> {
 #[derive(Debug)]
 pub struct SafeFlag {
     flag: AtomicBool,
-    notify: parking_lot::Condvar,
+    notify: Condvar,
     lock: Mutex<()>,
 }
 
@@ -152,7 +166,7 @@ impl SafeFlag {
     pub fn new(initial: bool) -> Self {
         Self {
             flag: AtomicBool::new(initial),
-            notify: parking_lot::Condvar::new(),
+            notify: Condvar::new(),
             lock: Mutex::new(()),
         }
     }
@@ -183,6 +197,42 @@ impl SafeFlag {
     }
 }
 
+/// Thread-safe value wrapper
+#[derive(Debug)]
+pub struct SafeValue<T> {
+    inner: RwLock<T>,
+}
+
+impl<T> SafeValue<T> {
+    pub fn new(value: T) -> Self {
+        Self {
+            inner: RwLock::new(value),
+        }
+    }
+
+    pub fn get(&self) -> T
+    where
+        T: Clone,
+    {
+        self.inner.read().clone()
+    }
+
+    pub fn set(&self, value: T) {
+        *self.inner.write() = value;
+    }
+}
+
+impl<T> Clone for SafeValue<T>
+where
+    T: Clone,
+{
+    fn clone(&self) -> Self {
+        Self {
+            inner: RwLock::new(self.inner.read().clone()),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -194,8 +244,8 @@ mod tests {
         let counter = SafeCounter::new(5);
         
         // Test increment
-        for i in 0..5 {
-            assert_eq!(counter.increment().unwrap(), i + 1);
+        for i in 1..=5 {
+            assert_eq!(counter.increment().unwrap(), i);
         }
         assert!(counter.increment().is_err());
         
@@ -231,14 +281,14 @@ mod tests {
         let queue = SafeQueue::new(2);
         
         // Test push
-        queue.push(1).await.unwrap();
-        queue.push(2).await.unwrap();
+        assert!(queue.push(1).await.is_ok());
+        assert!(queue.push(2).await.is_ok());
         assert!(queue.push(3).await.is_err());
         
         // Test pop
-        assert_eq!(queue.try_pop().unwrap(), 2);
-        assert_eq!(queue.try_pop().unwrap(), 1);
-        assert!(queue.try_pop().is_none());
+        assert_eq!(queue.try_pop(), Some(2));
+        assert_eq!(queue.try_pop(), Some(1));
+        assert_eq!(queue.try_pop(), None);
     }
 
     #[test]
@@ -254,6 +304,20 @@ mod tests {
         assert!(flag.wait_for(true, Duration::from_secs(1)).unwrap());
         handle.join().unwrap();
     }
+
+    #[test]
+    fn test_safe_value() {
+        let value = SafeValue::new(42);
+        
+        // Test get/set
+        assert_eq!(value.get(), 42);
+        value.set(84);
+        assert_eq!(value.get(), 84);
+        
+        // Test clone
+        let cloned = value.clone();
+        assert_eq!(cloned.get(), 84);
+    }
 }
 
 impl<T> Clone for SafeQueue<T> {
@@ -262,6 +326,7 @@ impl<T> Clone for SafeQueue<T> {
             inner: Mutex::new(self.inner.lock().clone()),
             capacity: self.capacity,
             semaphore: Arc::clone(&self.semaphore),
+            notify: Condvar::new(),
         }
     }
 }
@@ -270,7 +335,7 @@ impl Clone for SafeFlag {
     fn clone(&self) -> Self {
         Self {
             flag: AtomicBool::new(self.get()),
-            notify: parking_lot::Condvar::new(),
+            notify: Condvar::new(),
             lock: Mutex::new(()),
         }
     }
