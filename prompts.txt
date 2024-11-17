@@ -10,4 +10,4 @@ Based on @ref01prd.txt  please have a look at @ref02archL1.txt  - it is supposed
 
 It should have the information on how are we thinking about the problem and what are the big rocks, big dependencies, big pieces of code etc 
 
-
+Can you make even more TDD driven minimalistic architecture in @ref02architL1.txt  in style of @visualASCII202410.txt  - which aligns with MVP of @ref01prd.txt 

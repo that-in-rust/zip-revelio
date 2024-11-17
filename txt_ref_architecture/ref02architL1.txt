@@ -1,0 +1,125 @@
+ZIP-REVELIO MVP: TDD-FIRST ARCHITECTURE
+===================================
+
+1. TEST-DRIVEN FLOW
+-----------------
+                      [4GB ZIP]
+                          |
+                    validate_size
+                          |
+                          v
+[Tests] --> [ZIP Reader] --> [Processor] --> [Reporter]
+   |            |               |               |
+   +---> size   +---> async    +---> rayon     +---> format
+   |            |      chunks       parallel        match
+   +---> crc32  |               |               |
+   |            v               v               v
+   +---> async  (2ms max)    (20ms/MB)    (PRD format)
+
+2. MVP COMPONENTS (3 Files Only)
+-----------------------------
+src/
+├── lib.rs    # Core traits + tests
+├── main.rs   # CLI + progress
+└── zip.rs    # Implementation
+
+3. TEST-FIRST TRAITS
+------------------
+```rust
+// lib.rs
+#[cfg(test)]
+mod tests {
+    #[tokio::test]
+    async fn test_size_limit() {
+        let zip = ZipFile::new("large.zip");
+        assert!(zip.size() <= 4 * 1024 * 1024 * 1024);
+    }
+
+    #[tokio::test]
+    async fn test_read_speed() {
+        let start = Instant::now();
+        zip.read_directory().await?;
+        assert!(start.elapsed() <= Duration::from_millis(2));
+    }
+
+    #[test]
+    fn test_parallel_process() {
+        let chunk = zip.get_chunk(1024 * 1024); // 1MB
+        let start = Instant::now();
+        processor.process(chunk)?;
+        assert!(start.elapsed() <= Duration::from_millis(20));
+    }
+
+    #[test]
+    fn test_report_format() {
+        let report = reporter.generate(stats)?;
+        assert_matches!(report, PRD_FORMAT);
+    }
+}
+
+// Core traits driven by tests
+pub trait ZipReader: Send + Sync {
+    async fn read_directory(&self) -> Result<Directory>;
+    fn get_chunk(&self, size: usize) -> Result<Chunk>;
+}
+
+pub trait Processor: Send + Sync {
+    fn process(&self, chunk: Chunk) -> Result<Stats>;
+}
+
+pub trait Reporter {
+    fn generate(&self, stats: Stats) -> Result<String>;
+}
+```
+
+4. CORE TYPES
+-----------
+```rust
+#[derive(Debug)]
+pub struct Stats {
+    size: u64,      // Total size
+    compressed: u64, // Compressed size
+    count: usize,   // File count
+    methods: Vec<(Method, usize)>, // Compression methods
+}
+
+pub struct Progress {
+    total: AtomicU64,
+    processed: AtomicU64,
+}
+```
+
+5. ERROR HANDLING
+--------------
+```rust
+pub enum Error {
+    SizeLimit(u64),    // > 4GB
+    IoError(io::Error),// File access
+    ZipError(u32),     // Bad signature
+    Crc32Error(u32),   // Bad checksum
+}
+
+impl Error {
+    fn should_continue(&self) -> bool {
+        !matches!(self, Error::SizeLimit(_))
+    }
+}
+```
+
+6. PERFORMANCE CONSTRAINTS
+-----------------------
+```rust
+const MAX_SIZE: u64 = 4 * 1024 * 1024 * 1024; // 4GB
+const DIR_READ_MS: u64 = 2;                    // 2ms
+const CHUNK_PROCESS_MS: u64 = 20;              // 20ms/MB
+const THREAD_MEMORY_MB: usize = 5;             // 5MB/thread
+```
+
+7. IMPLEMENTATION ORDER
+--------------------
+1. Size validation tests
+2. Directory reading tests
+3. Chunk processing tests
+4. Report format tests
+5. Progress bar tests
+6. Integration tests

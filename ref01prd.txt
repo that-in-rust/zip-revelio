@@ -2,7 +2,7 @@
 
 Core Requirements 🎯
 
-1. CLI tool to analyze a single ZIP file using parallel processing
+1. CLI tool to analyze a single ZIP file with max size 4 GB using parallel processing
 2. Uses tokio for async I/O and rayon for parallel decompression
 3. Outputs analysis to a text file
 4. Shows progress bar during analysis
@@ -41,7 +41,7 @@ Files (sorted alphabetically):
 
 e.g.
 1.
-cargo run -- /home/amuldotexe/Downloads/node-main.zip /home/amuldotexe/Downloads/node-main-20241105v2.txt
+cargo run -- /home/amuldotexe/Downloads/node-main.zip /home/amuldotexe/Downloads/node-main-20241117v1.txt
 
 Constraints:
 - ASCII filenames only (for compatibility)
