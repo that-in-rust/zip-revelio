@@ -1,6 +1,6 @@
-# ZIP-REVELIO
+# zip-revelio 🪄
 
-Ever wanted to peek inside a huge ZIP file without waiting forever? That's exactly what ZIP-REVELIO does!
+Ever wanted to peek inside a huge ZIP file without waiting forever? That's exactly what zip-revelio does!
 
 ``` text
 ZIP File (<4GB)     ZIP-REVELIO        Analysis Report
