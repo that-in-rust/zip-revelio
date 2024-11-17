@@ -25,10 +25,10 @@ Files found:
   ...
 ```
 Example 1: we analyzed the 145 mb node-main.zip file in 1.3 seconds 
-![Node.js ZIP Analysis](txt_ref_files/images/node-main-analysis.png)
+<img src="txt_ref_files/images/node-main-analysis.png" alt="Node.js ZIP Analysis" width="500"/>
 
 Example 2: we analyzed 1.3 GB chromium-main.zip in 16 seconds
-![Chromium ZIP Analysis](txt_ref_files/images/chromium-main-analysis.png)
+<img src="txt_ref_files/images/chromium-main-analysis.png" alt="Chromium ZIP Analysis" width="500"/>
 
 ## 🚀 Try It Yourself!
 
