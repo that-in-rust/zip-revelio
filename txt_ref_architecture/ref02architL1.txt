@@ -60,7 +60,6 @@ mod tests {
 // Core traits driven by tests
 pub trait ZipReader: Send + Sync {
     async fn read_directory(&self) -> Result<Directory>;
-    fn get_chunk(&self, size: usize) -> Result<Chunk>;
 }
 
 pub trait Processor: Send + Sync {
@@ -123,3 +122,179 @@ const THREAD_MEMORY_MB: usize = 5;             // 5MB/thread
 4. Report format tests
 5. Progress bar tests
 6. Integration tests
+
+ZIP-REVELIO Architecture v1.0
+========================
+
+# ZIP-REVELIO: Minimalistic ZIP Analysis Tool
+
+"A stopwatch for your ZIP files - it tells you exactly what's inside and how fast it got there."
+
+## Core Components (What We Have)
+```
+Input/Output Flow:
+ZIP File ──► Analysis ──► Report
+    │           │           │
+    v           v           v
+ 4GB max     Parallel    Metrics
+   size     processing    output
+```
+
+## Test-First Design Flow
+```
+Test ──────► Code ──────► Refactor
+  │            │            │
+  v            v            v
+Defines     Minimal     Optimize
+  API      Solution    Performance
+```
+
+## Core Test Suite → Implementation
+```rust
+// 1. Size Validation Test → Implementation
+#[test]
+async fn test_size_limit() -> Result<()> {
+    let file = create_large_file(MAX_SIZE + 1);
+    let reader = FileZipReader::new(file);
+    assert!(matches!(
+        reader.validate_size().await,
+        Err(Error::SizeLimit { .. })
+    ));
+}
+↓
+impl FileZipReader {
+    async fn validate_size(&self) -> Result<()> {
+        let size = fs::metadata(&self.path).await?.len();
+        if size > MAX_SIZE {
+            return Err(Error::SizeLimit { size });
+        }
+        Ok(())
+    }
+}
+
+// 2. Directory Reading Test → Implementation
+#[test]
+async fn test_valid_zip() -> Result<()> {
+    let file = create_test_zip()?;
+    let reader = FileZipReader::new(file);
+    let dir = reader.read_directory().await?;
+    assert_eq!(dir.entries.len(), 1);
+    Ok(())
+}
+↓
+impl FileZipReader {
+    async fn read_directory(&self) -> Result<Directory> {
+        let archive = Arc::new(Mutex::new(
+            zip::ZipArchive::new(...)?
+        ));
+        let entries = (0..len).into_par_iter()
+            .filter_map(|i| { ... })
+            .collect();
+        Ok(Directory { entries })
+    }
+}
+```
+
+## Performance Test → Implementation
+```rust
+// 3. Performance Test → Parallel Processing
+#[bench]
+fn bench_process_10mb(b: &mut Bencher) {
+    b.iter(|| {
+        let stats = Arc::new(Stats::new());
+        let reader = AsyncZipReader::new(
+            "test_data/10mb.zip"
+        );
+        process_zip(reader, stats)
+    });
+}
+↓
+entries.into_par_iter()
+       .filter_map(|i| {
+           let mut guard = archive.lock();
+           // Fast, parallel processing
+       })
+```
+
+## Error Test → Error Handling
+```
+Test Error       Implementation
+    │                │
+    v                v
+┌─────────┐    ┌─────────┐
+│Size     │───►│Handle   │
+│Format   │───►│Validate │
+│IO       │───►│Recover  │
+└─────────┘    └─────────┘
+```
+
+## Memory Safety Test → Pattern
+```
+Test                 Implementation
+  │                       │
+  v                      v
+Safe ──────►  Arc<Mutex<ZipArchive>>
+Share          │
+Access         └──► Thread-safe read
+```
+
+## Test Categories Drive Design
+```
+Unit Tests        Integration      Benchmarks
+     │                │               │
+     v                v               v
+  ┌─────────────┬──────────────┬──────────┐
+  │Validation   │End-to-End    │Speed     │
+  │Processing   │CLI Interface │Memory    │
+  │Error Cases  │File Output   │CPU Usage │
+  └─────────────┴──────────────┴──────────┘
+```
+
+## Performance Metrics (Test-Driven)
+```
+Benchmark Goals   Implementation
+     │                │
+     v                v
+Speed >20MB/s ──► Parallel
+CPU 8 cores  ──► Rayon
+Memory <512MB ──► Efficient
+```
+
+## Test Data → Implementation
+```
+test_data/         Validates
+├── 1mb.zip   ───► Normal case
+├── 10mb.zip  ───► Performance
+└── corrupted ───► Error handling
+```
+
+## Why TDD Works Here
+1. Tests Define Requirements
+   ```
+   test_valid_zip    ──► Basic functionality
+   test_empty_zip    ──► Edge cases
+   test_size_limit   ──► Constraints
+   bench_process_10mb ──► Performance
+   ```
+
+2. Minimal Implementation
+   ```
+   Only code what tests require
+   No speculative features
+   Clear success criteria
+   Measurable performance
+   ```
+
+3. Refactor with Confidence
+   ```
+   Tests protect core functionality
+   Performance metrics guide optimization
+   Error cases are verified
+   Memory safety is assured
+   ```
+
+Remember:
+- Write test first
+- Implement minimal solution
+- Measure performance
+- Refactor safely
