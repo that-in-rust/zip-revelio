@@ -5,7 +5,7 @@ Ever wanted to peek inside a huge ZIP file without waiting forever? That's exact
 ```ascii
 ZIP File (4GB)     ZIP-REVELIO        Analysis Report
    ┌─────┐         ┌─────────┐         ┌─────────┐
-   │.zip │   →     │⚡ 23MB/s│    →    │📊 Stats │
+   │.zip │   →     │⚡ 23MB/s │    →    │📊 Stats │
    └─────┘         └─────────┘         └─────────┘
      Input         Processing           Output
 ```
@@ -24,6 +24,8 @@ Files found:
   /path/to/file2.zip
   ...
 ```
+
+
 
 ## 🚀 Try It Yourself!
 
