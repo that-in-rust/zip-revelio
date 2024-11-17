@@ -25,10 +25,10 @@ Files found:
   ...
 ```
 Example 1: we analyzed the 145 mb node-main.zip file in 1.3 seconds 
-![alt text](image.png)
+![alt text](image-2.png)
 
 Example 2: we analyzed 1.3 GB chromium-main.zip in 16 seconds
-![alt text](image-1.png)
+![alt text](image-3.png)
 
 ## 🚀 Try It Yourself!
 
