@@ -9,32 +9,6 @@ ZIP File (4GB)     ZIP-REVELIO        Analysis Report
    └─────┘         └─────────┘         └─────────┘
      Input         Processing           Output
 ```
-
-## 🎯 What's Cool About It?
-
-Think of it as a super-fast ZIP file detective:
-```rust
-// Real example of what it does:
-let huge_zip = "your-4gb-file.zip";
-println!("ZIP-REVELIO: Let me check that file for you!");
-// [....] Processing at 23.5 MB/s
-println!("Found: 1,337 files (1.31 GB total)");
-println!("They're compressed down to 445 MB (66% smaller!)");
-```
-
-## 🚀 Try It Yourself!
-
-It's as simple as:
-```bash
-# Just point it at your ZIP file
-cargo run -- your-file.zip report.txt
-
-# For example:
-cargo run -- /home/downloads/node-main.zip node-main-analysis.txt
-#            |                          |
-#            Your ZIP file             Where to save the report
-```
-
 ## 📊 What You'll Get
 
 A detailed report like this:
@@ -50,6 +24,20 @@ Files found:
   /path/to/file2.zip
   ...
 ```
+
+## 🚀 Try It Yourself!
+
+It's as simple as:
+```bash
+# Just point it at your ZIP file
+cargo run -- your-file.zip report.txt
+
+# For example:
+cargo run -- /home/downloads/node-main.zip node-main-analysis.txt
+#            |                                  |
+#            Your ZIP file                      Where to save the report
+```
+
 
 ## ⚡ How Fast Is It?
 
