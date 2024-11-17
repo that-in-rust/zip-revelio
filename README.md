@@ -1,4 +1,4 @@
-# 🔍 ZIP-REVELIO
+# ZIP-REVELIO
 
 Ever wanted to peek inside a huge ZIP file without waiting forever? That's exactly what ZIP-REVELIO does!
 
