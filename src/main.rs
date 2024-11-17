@@ -37,7 +37,33 @@ async fn main() -> Result<()> {
     let directory = reader.read_directory().await?;
 
     pb.set_message("Generating report...");
-    // TODO: Generate report
+    // Generate and write report
+    use std::fs::File;
+    use std::io::Write;
+    let mut output = File::create(&opt.output)?;
+    
+    writeln!(output, "ZIP File Analysis Report")?;
+    writeln!(output, "=======================")?;
+    writeln!(output, "\nFile: {}", opt.input.display())?;
+    writeln!(output, "Total entries: {}", directory.entries.len())?;
+    
+    let total_size: u64 = directory.entries.iter().map(|e| e.size).sum();
+    let total_compressed: u64 = directory.entries.iter().map(|e| e.compressed_size).sum();
+    
+    writeln!(output, "Total uncompressed size: {} bytes", total_size)?;
+    writeln!(output, "Total compressed size: {} bytes", total_compressed)?;
+    writeln!(output, "Compression ratio: {:.2}%", (1.0 - (total_compressed as f64 / total_size as f64)) * 100.0)?;
+    
+    writeln!(output, "\nFile Listing:")?;
+    writeln!(output, "------------")?;
+    
+    for entry in directory.entries.iter() {
+        writeln!(output, "{}", entry.name)?;
+        writeln!(output, "  Size: {} bytes", entry.size)?;
+        writeln!(output, "  Compressed: {} bytes", entry.compressed_size)?;
+        writeln!(output, "  CRC32: {:08x}", entry.crc32)?;
+        writeln!(output)?;
+    }
 
     pb.finish_with_message("Analysis complete!");
     
