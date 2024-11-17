@@ -16,7 +16,8 @@ Simple! Just do cargo run and point it to your ZIP file & intended output file:
 cargo run -- input.zip output.txt
 
 // e.g. 
-cargo run -- /home/amuldotexe/Downloads/node-main.zip /home/amuldotexe/Downloads/node-main-20241117v2.txt
+cargo run -- /home/amuldotexe/Downloads/node-main.zip /home/amuldotexe/Downloads/node-main-20241117v3.txt
+cargo run -- /home/amuldotexe/Downloads/chromium-main.zip /home/amuldotexe/Downloads/chromium-main-20241117v1.txt
 ```
 
 And you'll get this Example Output:
