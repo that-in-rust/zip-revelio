@@ -46,3 +46,37 @@ cargo run -- /home/amuldotexe/Downloads/node-main.zip /home/amuldotexe/Downloads
 Constraints:
 - ASCII filenames only (for compatibility)
 - Store/Deflate compression only (most common methods)
+
+Implementation Guidelines 🔧
+
+1. Performance Parameters
+   - Entry chunk size: 1-4MB optimal
+   - Target memory usage: 2-5MB per thread
+   - Directory read time: < 2ms
+   - Entry process time: 5-20ms per MB
+
+2. Error Handling Strategy
+   - Validate ZIP signatures (0x04034b50, 0x02014b50, 0x06054b50)
+   - Verify CRC32 checksums
+   - Skip corrupted entries, continue processing
+   - Report errors in output file
+
+3. Thread Safety Requirements
+   - Use atomic counters for progress
+   - Immutable central directory sharing
+   - Thread-local entry buffers
+   - Lock-free stats collection
+
+4. Processing Order
+   ```
+   1. Locate End Directory
+   2. Parse Central Directory
+   3. Parallel Entry Processing
+   4. Generate Report
+   ```
+
+5. Buffer Management
+   - Use thread-local buffers for entries
+   - Optimize for ZIP entry sizes
+   - Minimize memory allocations
+   - Handle large files efficiently

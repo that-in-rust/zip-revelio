@@ -1,36 +1,55 @@
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
-use std::path::PathBuf;
-use zip_revelio::{Analyzer, Config};
+use std::sync::Arc;
+use tokio::runtime::Runtime;
+use zip_revelio::{
+    reader::AsyncZipReader,
+    processor::ParallelProcessor,
+    stats::Stats,
+};
 
-async fn process_zip(input: PathBuf, output: PathBuf) -> anyhow::Result<()> {
-    let config = Config::default();
-    let analyzer = Analyzer::new(config);
-    analyzer.analyze(input, output).await
-}
+fn benchmark_zip_processing(c: &mut Criterion) {
+    let rt = Runtime::new().unwrap();
 
-pub fn zip_processing_benchmark(c: &mut Criterion) {
-    let runtime = tokio::runtime::Runtime::new().unwrap();
+    let mut group = c.benchmark_group("zip_processing");
+    group.sample_size(10);
+    group.measurement_time(std::time::Duration::from_secs(30));
 
-    c.bench_function("process_1mb_zip", |b| {
-        b.to_async(&runtime).iter(|| async {
-            process_zip(
-                black_box(PathBuf::from("test_data/1mb.zip")),
-                black_box(PathBuf::from("test_data/report.txt")),
-            )
-            .await
+    // Benchmark 1MB ZIP processing
+    group.bench_function("process_1mb", |b| {
+        b.iter(|| {
+            rt.block_on(async {
+                let stats = Arc::new(Stats::new());
+                let reader = AsyncZipReader::new("test_data/1mb.zip").await.unwrap();
+                let processor = ParallelProcessor::new(num_cpus::get(), Arc::clone(&stats)).unwrap();
+                
+                black_box(process_zip(reader, processor).await.unwrap());
+            });
         });
     });
 
-    c.bench_function("process_10mb_zip", |b| {
-        b.to_async(&runtime).iter(|| async {
-            process_zip(
-                black_box(PathBuf::from("test_data/10mb.zip")),
-                black_box(PathBuf::from("test_data/report.txt")),
-            )
-            .await
+    // Benchmark 10MB ZIP processing
+    group.bench_function("process_10mb", |b| {
+        b.iter(|| {
+            rt.block_on(async {
+                let stats = Arc::new(Stats::new());
+                let reader = AsyncZipReader::new("test_data/10mb.zip").await.unwrap();
+                let processor = ParallelProcessor::new(num_cpus::get(), Arc::clone(&stats)).unwrap();
+                
+                black_box(process_zip(reader, processor).await.unwrap());
+            });
         });
     });
+
+    group.finish();
 }
 
-criterion_group!(benches, zip_processing_benchmark);
+async fn process_zip(mut reader: AsyncZipReader, processor: ParallelProcessor) -> zip_revelio::Result<()> {
+    reader.seek_end_directory().await?;
+    while let Some(entry) = reader.read_entry().await? {
+        processor.process_entry(entry, Default::default()).await?;
+    }
+    Ok(())
+}
+
+criterion_group!(benches, benchmark_zip_processing);
 criterion_main!(benches);

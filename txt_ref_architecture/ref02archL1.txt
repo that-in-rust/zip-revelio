@@ -1,152 +1,1741 @@
-# ZIP-Revelio: High-Level Architecture 🏗️
+# ZIP-Revelio Architecture Document
 
-"Like a well-organized warehouse where multiple workers efficiently process packages in parallel, ZIP-Revelio handles ZIP files with speed and precision!"
+## Table of Contents
+1. [System Overview](#i-system-overview)
+2. [Core Components](#ii-core-components)
+3. [Concurrency Model](#iii-concurrency-model)
+4. [Safety Considerations](#iv-safety-considerations)
+5. [Resource Management](#v-resource-management)
+6. [Error Handling](#vi-error-handling)
+7. [Test Data Strategy](#vii-test-data-strategy)
+8. [Implementation Status](#viii-implementation-status)
+9. [Learning from Implementation Challenges](#ix-learning-from-implementation-challenges)
+10. [Enhanced Architecture Specifications](#x-enhanced-architecture-specifications)
 
-## System Overview
-```
-ZIP-Revelio
-    │
-    ├── CLI Interface
-    │   ├── Argument Parser (clap)
-    │   └── Progress Display (indicatif)
-    │
-    ├── ZIP Processor
-    │   ├── Memory-Mapped Reader
-    │   ├── Entry Processor
-    │   └── CRC32 Validator
-    │
-    ├── Memory Manager
-    │   ├── Buffer Pool
-    │   │   ├── Small Buffers (<64KB)
-    │   │   ├── Medium Buffers (<1MB)
-    │   │   └── Large Memory Maps (>1MB)
-    │   └── Resource Monitor
-    │
-    ├── Parallel Engine
-    │   ├── Thread Pool (rayon)
-    │   ├── Work Distributor
-    │   └── Progress Tracker
-    │
-    └── Report Generator
-        ├── Stats Collector
-        └── Report Formatter
-```
+# I. System Overview
+                                   ZIP-Revelio System Flow
+                                   =====================
 
-## Key Design Decisions 🤔
+Input                    Processing Pipeline                      Output
+──────                   ──────────────────────                  ──────
+                             
+  ZIP     ┌─────────┐    ┌─────────────────┐    ┌─────────┐    Report
+  File ───►│CLI Args │───►│Async ZIP Reader │───►│Reporter │────► File
+          └─────────┘    └─────────────────┘    └─────────┘
+                                 │
+                         ┌───────┴───────┐
+                         │               │
+                    ┌────▼────┐    ┌────▼────┐
+                    │Parallel │    │Progress │
+                    │Workers  │    │Display  │
+                    └────┬────┘    └─────────┘
+                         │
+                    ┌────▼────┐
+                    │Stats    │
+                    │Collector│
+                    └─────────┘
 
-1. Memory Management Strategy
-   ```
-   File Size    Strategy          Buffer Type
-   < 64KB       Direct           Stack Buffer
-   64KB-1MB     Pool             Shared Buffer
-   > 1MB        Memory Map       File Mapping
-   ```
+# II. Core Components and Data Flow
 
-2. Parallel Processing Approach
-   ```
-   ZIP File ──> Memory Map
-       │
-   Central Directory Read (Single Thread)
-       │
-   ┌────┴────┐
-   │Entry 1  │ Worker 1 ──> Buffer Pool
-   │Entry 2  │ Worker 2 ──> Buffer Pool
-   │Entry 3  │ Worker 3 ──> Buffer Pool
-   │Entry 4  │ Worker N ──> Buffer Pool
-   └────┬────┘
-        │
-   Stats Collection
-   ```
+## 1. CLI Interface
+   ┌──────────────────────────────────────┐
+   │ CLI (main.rs)                        │
+   │  ├─ Args {                           │
+   │  │   input_path: PathBuf,            │
+   │  │   output_path: PathBuf            │
+   │  │ }                                 │
+   │  └─ Progress Bar                     │
+   └──────────────┬───────────────────────┘
+                  │
+                  ▼
 
-3. Progress Tracking
-   ```
-   Entry Process ──> Atomic Counter ──> Progress Bar
-        │                │                  │
-        └── Parallel    Thread-Safe    Real-time
-            Tasks       Updates        Feedback
-   ```
-
-## Core Components 🔧
-
-1. CLI Interface
-   - Simple command: `cargo run -- input.zip output.txt`
-   - Optional thread count configuration
-   - Real-time progress with speed display
-   - Graceful Ctrl+C handling
-
-2. ZIP Processor
-   - Memory-mapped file access
-   - Parallel entry processing
-   - CRC32 validation
-   - Store/Deflate support
-
-3. Memory Manager
-   - Tiered buffer strategy
-   - Pre-allocated buffer pools
-   - Memory-mapped large files
-   - Resource monitoring
-
-4. Parallel Engine
-   - Rayon thread pool
-   - Work stealing scheduler
-   - Adaptive thread count
-   - Progress tracking
-
-5. Report Generator
-   ```
-   === ZIP Analysis Report ===
-   - Total size and compression
-   - Processing duration
-   - File type breakdown
-   - Method statistics
-   - File listing
-   ```
-
-## Performance Optimizations 🚀
-
-1. Memory Strategy
-   - Pre-allocated buffer pools
-   - Memory mapping for large files
-   - Buffer reuse
-   - Minimal copying
-
-2. Thread Management
+   Implementation Details:
    ```rust
-   thread_count = min(
-       num_cpus::get(),
-       max(1, files.len() / 10)
-   )
+   ┌─────────────────────────────────────────────────┐
+   │ // CLI Argument Parsing                         │
+   │ #[derive(Parser)]                              │
+   │ struct Args {                                  │
+   │     input_path: PathBuf,        // ZIP file    │
+   │     output_path: PathBuf,       // Report file │
+   │ }                                              │
+   └─────────────────────┬───────────────────────────┘
+                         │
+                         ▼
+   ┌─────────────────────────────────────────────────┐
+   │ // Progress Bar Setup                           │
+   │ let total_size = input_path.metadata()?.len();  │
+   │ let pb = ProgressBar::new(total_size);          │
+   │ pb.set_style(ProgressStyle::default_bar()       │
+   │     .template("{spinner:.green} [{bar:40.cyan/blue}] {bytes}/{total_bytes} ({eta})") │
+   └─────────────────────┬───────────────────────────┘
+                         │
+                         ▼
+   ┌─────────────────────────────────────────────────┐
+   │ // Main Async Runtime                           │
+   │ #[tokio::main]                                 │
+   │ async fn main() -> Result<()> {                │
+   │     let args = Args::parse();                  │
+   │     //    │                                    │
+   │     //    └── Command-line parsing            │
+   │     //                                        │
+   │     let pb = setup_progress_bar();            │
+   │     //    │                                   │
+   │     //    └── Progress display setup          │
+   │     //                                        │
+   │     process_zip_file(args, pb).await?;        │
+   │     //    │                                   │
+   │     //    └── Main processing pipeline        │
+   │     Ok(())                                    │
+   │ }                                             │
+   └─────────────────────┬───────────────────────────┘
+                         │
+                         ▼
+   ┌─────────────────────────────────────────────────┐
+   │ // Error Handling                               │
+   │ fn handle_error(e: Error) {                     │
+   │     match e {                                   │
+   │         Error::Io(e) => // Handle IO errors     │
+   │         Error::Zip(e) => // Handle ZIP errors   │
+   │         Error::Other(e) => // Handle others     │
+   │     }                                           │
+   │ }                                               │
+   └─────────────────────────────────────────────────┘
+
+   Progress Bar States:
+   ┌────────────────────────────────────────┐
+   │ [===================>---------------] 50%│ Processing ZIP...
+   │ [=============================>----] 85%│ Analyzing entries...
+   │ [================================>] 99%│ Writing report...
+   │ [=================================] 100%│ Complete!
+   └────────────────────────────────────────┘
+
+## 2. Async ZIP Reader
+```
+   ┌──────────────────────────────────────┐
+   │ ZipReader (reader.rs)                │
+   │  ├─ End Directory Location           │
+   │  │   └─ async seek_signature()       │
+   │  │                                   │
+   │  ├─ Central Directory               │
+   │  │   └─ async read_central_dir()    │
+   │  │                                   │
+   │  └─ Entry Stream                     │
+   │      └─ async stream_entries()       │
+   └──────────────┬───────────────────────┘
+                  │
+                  ▼
+
+   Implementation Details:
+   ```rust
+   ┌─────────────────────────────────────────────────┐
+   │ // Async ZIP Reader Structure                   │
+   │ pub struct AsyncZipReader {                     │
+   │     file: tokio::fs::File,     // Async file   │
+   │     buffer: BytesMut,          // Read buffer  │
+   │     central_dir: Arc<CentralDirectory>,        │
+   │ }                                              │
+   └─────────────────────┬───────────────────────────┘
+                         │
+                         ▼
+   ┌─────────────────────────────────────────────────┐
+   │ // End Directory Location                       │
+   │ async fn seek_end_directory(&mut self) -> Result<u64> {
+   │     const SIGNATURE: u32 = 0x06054b50;         │
+   │     let mut pos = self.file.seek(SeekFrom::End(-22)).await?;
+   │     //    │                                    │
+   │     //    └── Start from end - minimum size   │
+   │     loop {                                     │
+   │         let sig = self.read_u32().await?;      │
+   │         if sig == SIGNATURE {                  │
+   │             return Ok(pos);                    │
+   │         }                                      │
+   │         pos -= 1;                             │
+   │     }                                         │
+   │ }                                             │
+   └─────────────────────┬───────────────────────────┘
+                         │
+                         ▼
+   ┌─────────────────────────────────────────────────┐
+   │ // Central Directory Parser                     │
+   │ async fn read_central_directory(&mut self) -> Result<()> {
+   │     let mut entries = Vec::new();              │
+   │     while let Some(entry) = self.read_cd_entry().await? {
+   │         //    │                                │
+   │         //    └── Parse each entry header     │
+   │         entries.push(entry);                   │
+   │     }                                          │
+   │     self.central_dir = Arc::new(CentralDirectory::new(entries));
+   │ }                                              │
+   └─────────────────────┬───────────────────────────┘
+                         │
+                         ▼
+   ┌─────────────────────────────────────────────────┐
+   │ // Entry Streaming                              │
+   │ pub fn stream_entries(&self)                    │
+   │     -> impl Stream<Item = Result<ZipEntry>> {   │
+   │     stream::iter(self.central_dir.entries())    │
+   │         .map(|entry| async {                    │
+   │             self.read_entry_data(entry).await   │
+   │         })                                      │
+   │         .buffer_unordered(num_cpus::get())     │
+   │ }                                              │
+   └─────────────────────┬───────────────────────────┘
+                         │
+                         ▼
+   ┌─────────────────────────────────────────────────┐
+   │ // Memory Management                            │
+   │ impl AsyncZipReader {                           │
+   │     const BUFFER_SIZE: usize = 64 * 1024;      │
+   │     //    │                                    │
+   │     //    └── 64KB optimal buffer size        │
+   │                                                │
+   │     fn new_buffer() -> BytesMut {              │
+   │         BytesMut::with_capacity(Self::BUFFER_SIZE)
+   │     }                                          │
+   │ }                                              │
+   └─────────────────────────────────────────────────┘
+
+   Data Flow Diagram:
+   ┌──────────────┐     ┌──────────────┐     ┌──────────────┐
+   │  ZIP File    │ ──► │ End Dir Loc  │ ──► │ Central Dir  │
+   └──────────────┘     └──────────────┘     └──────────────┘
+          │                                          │
+          │                                          ▼
+   ┌──────────────┐     ┌──────────────┐     ┌──────────────┐
+   │ Entry Stream │ ◄── │ Entry Reader │ ◄── │ Dir Entries  │
+   └──────────────┘     └──────────────┘     └──────────────┘
+
+## 3. Parallel Processing
+```
+   ┌──────────────────────────────────────┐
+   │ Processor (processor.rs)             │
+   │  ├─ ThreadPool                       │
+   │  │   └─ rayon::ThreadPoolBuilder    │
+   │  │                                   │
+   │  ├─ Entry Queue                      │
+   │  │   └─ tokio::sync::mpsc::channel  │
+   │  │                                   │
+   │  └─ Processing Strategy             │
+   │      ├─ Store (Method 0)            │
+   │      └─ Deflate (Method 8)          │
+   └──────────────┬───────────────────────┘
+                  │
+                  ▼
+
+   Implementation Details:
+   ```rust
+   ┌─────────────────────────────────────────────────┐
+   │ // Parallel Processor Configuration             │
+   │ pub struct ParallelProcessor {                  │
+   │     pool: rayon::ThreadPool,                    │
+   │     tx: mpsc::Sender<ZipEntry>,                │
+   │     rx: mpsc::Receiver<ZipEntry>,              │
+   │     stats: Arc<Stats>,                         │
+   │     chunk_size: usize,  // 1-4MB optimal       │
+   │ }                                              │
+   └─────────────────────┬───────────────────────────┘
+                         │
+                         ▼
+   ┌─────────────────────────────────────────────────┐
+   │ // Thread Pool Setup                            │
+   │ impl ParallelProcessor {                        │
+   │     fn new() -> Self {                         │
+   │         let (tx, rx) = mpsc::channel(32);      │
+   │         //    │                                │
+   │         //    └── Bounded channel for backpressure
+   │         let pool = rayon::ThreadPoolBuilder::new()
+   │             .num_threads(num_cpus::get())      │
+   │             .stack_size(5 * 1024 * 1024)       │
+   │             //    │                            │
+   │             //    └── 5MB stack per thread    │
+   │             .build()                           │
+   │             .expect("Failed to build pool");   │
+   │         Self { pool, tx, rx, ... }            │
+   │     }                                          │
+   │ }                                              │
+   └─────────────────────┬───────────────────────────┘
+                         │
+                         ▼
+   ┌─────────────────────────────────────────────────┐
+   │ // Entry Processing Pipeline                    │
+   │ async fn process_entries(&self) -> Result<()> { │
+   │     let (chunk_tx, chunk_rx) = flume::bounded(16);
+   │     //    │                                    │
+   │     //    └── Chunk queue with backpressure   │
+   │                                                │
+   │     // Spawn chunk processor                   │
+   │     self.pool.spawn(move || {                 │
+   │         chunk_rx.iter().for_each(|chunk| {    │
+   │             process_chunk(chunk);             │
+   │         });                                   │
+   │     });                                       │
+   │                                               │
+   │     // Process entries in chunks              │
+   │     while let Some(entry) = self.rx.recv().await? {
+   │         chunk_tx.send_async(entry).await?;    │
+   │     }                                         │
+   │     Ok(())                                    │
+   │ }                                             │
+   └─────────────────────┬───────────────────────────┘
+                         │
+                         ▼
+   ┌─────────────────────────────────────────────────┐
+   │ // Compression Methods                          │
+   │ enum ProcessingStrategy {                       │
+   │     Store(StoreProcessor),    // Method 0      │
+   │     Deflate(DeflateProcessor) // Method 8      │
+   │ }                                              │
+   │                                                │
+   │ impl ProcessingStrategy {                      │
+   │     fn process(&self, data: &[u8]) -> Result<Vec<u8>> {
+   │         match self {                           │
+   │             Store(p) => p.process(data),      │
+   │             Deflate(p) => p.process(data)     │
+   │         }                                      │
+   │     }                                          │
+   │ }                                              │
+   └─────────────────────────────────────────────────┘
+
+   Parallel Processing Flow:
+   ┌──────────────┐     ┌──────────────┐     ┌──────────────┐
+   │ Entry Stream │ ──► │ Entry Queue  │ ──► │Thread Pool   │
+   └──────────────┘     └──────────────┘     └──────────────┘
+          │                     │                    │
+          │                     ▼                    ▼
+   ┌──────────────┐     ┌──────────────┐     ┌──────────────┐
+   │ Stats Update │ ◄── │ Processing   │ ◄── │ Work Chunks  │
+   └──────────────┘     │ Strategy     │     └──────────────┘
+                        └──────────────┘
+
+   Memory Usage Per Thread:
+   ┌────────────────────────────────────────────┐
+   │ Stack: 5MB                                 │
+   │ ┌──────────────────────────────────────┐   │
+   │ │ Entry Buffer (1-4MB)                 │   │
+   │ └──────────────────────────────────────┘   │
+   │ ┌──────────────────────────┐              │
+   │ │ Processing Buffer (1MB)  │              │
+   │ └──────────────────────────┘              │
+   │ ┌────────────┐                            │
+   │ │ Other(1MB) │                            │
+   │ └────────────┘                            │
+   └────────────────────────────────────────────┘
+
+## 4. Stats Collection
+```
+   ┌──────────────────────────────────────┐
+   │ Stats (stats.rs)                     │
+   │  ├─ Atomic Counters                  │
+   │  │   ├─ total_files: AtomicUsize    │
+   │  │   └─ total_size: AtomicU64       │
+   │  │                                   │
+   │  ├─ Thread-Safe Collections          │
+   │  │   ├─ compression_methods: DashMap │
+   │  │   └─ file_types: DashMap         │
+   │  │                                   │
+   │  └─ Error Collection                 │
+   │      └─ errors: Mutex<Vec<Error>>    │
+   └──────────────┬───────────────────────┘
+                  │
+                  ▼
+
+   Implementation Details:
+   ```rust
+   ┌─────────────────────────────────────────────────┐
+   │ // Stats Structure                              │
+   │ #[derive(Default)]                             │
+   │ pub struct Stats {                             │
+   │     total_files: AtomicUsize,                  │
+   │     total_size: AtomicU64,                     │
+   │     compressed_size: AtomicU64,                │
+   │     methods: DashMap<u16, usize>,              │
+   │     types: DashMap<String, usize>,             │
+   │     errors: Mutex<Vec<ZipError>>,              │
+   │     start_time: Instant,                       │
+   │ }                                              │
+   └─────────────────────┬───────────────────────────┘
+                         │
+                         ▼
+   ┌─────────────────────────────────────────────────┐
+   │ // Atomic Counter Operations                    │
+   │ impl Stats {                                    │
+   │     pub fn increment_files(&self) {            │
+   │         self.total_files.fetch_add(1, Ordering::Relaxed);
+   │         //                        │            │
+   │         //                        └── Relaxed ordering for counters
+   │     }                                          │
+   │                                                │
+   │     pub fn add_size(&self, size: u64) {       │
+   │         self.total_size.fetch_add(size, Ordering::Relaxed);
+   │     }                                          │
+   │ }                                              │
+   └─────────────────────┬───────────────────────────┘
+                         │
+                         ▼
+   ┌─────────────────────────────────────────────────┐
+   │ // Thread-Safe Collections                      │
+   │ impl Stats {                                    │
+   │     pub fn record_method(&self, method: u16) { │
+   │         self.methods                           │
+   │             .entry(method)                     │
+   │             .and_modify(|count| *count += 1)   │
+   │             .or_insert(1);                     │
+   │         //    │                                │
+   │         //    └── Lock-free concurrent updates │
+   │     }                                          │
+   │                                                │
+   │     pub fn record_type(&self, ext: &str) {    │
+   │         self.types                            │
+   │             .entry(ext.to_string())           │
+   │             .and_modify(|count| *count += 1)  │
+   │             .or_insert(1);                    │
+   │     }                                         │
+   │ }                                             │
+   └─────────────────────┬───────────────────────────┘
+                         │
+                         ▼
+   ┌─────────────────────────────────────────────────┐
+   │ // Error Collection                             │
+   │ impl Stats {                                    │
+   │     pub fn record_error(&self, error: ZipError) {
+   │         let mut errors = self.errors.lock().unwrap();
+   │         //    │                                │
+   │         //    └── Short-lived mutex lock      │
+   │         errors.push(error);                    │
+   │     }                                          │
+   │                                                │
+   │     pub fn get_errors(&self) -> Vec<ZipError> {│
+   │         self.errors.lock().unwrap().clone()    │
+   │     }                                          │
+   │ }                                              │
+   └─────────────────────┬───────────────────────────┘
+                         │
+                         ▼
+   ┌─────────────────────────────────────────────────┐
+   │ // Stats Report Generation                      │
+   │ impl Stats {                                    │
+   │     pub fn generate_report(&self) -> String {  │
+   │         let duration = self.start_time.elapsed();
+   │         let ratio = self.compression_ratio();  │
+   │                                               │
+   │         format!(                              │
+   │             "=== ZIP Analysis Report ===\n\n" │
+   │             "Total size: {}\n"               │
+   │             "Files analyzed: {}\n"           │
+   │             "Analysis time: {:.2}s\n\n"      │
+   │             "Compression ratio: {:.1}%\n"     │
+   │             // ... more formatting ...        │
+   │         )                                     │
+   │     }                                         │
+   │ }                                             │
+   └─────────────────────────────────────────────────┘
+
+   Data Flow Diagram:
+   ┌──────────────┐     ┌──────────────┐     ┌──────────────┐
+   │ ZIP Entry    │ ──► │ Atomic       │ ──► │ Total Files  │
+   │ Processing   │     │ Counters     │     │ & Sizes      │
+   └──────────────┘     └──────────────┘     └──────────────┘
+          │                     │                    │
+          │                     ▼                    ▼
+   ┌──────────────┐     ┌──────────────┐     ┌──────────────┐
+   │ Error        │ ──► │ Thread-Safe  │ ──► │ Final Report │
+   │ Handling     │     │ Collections  │     │ Generation   │
+   └──────────────┘     └──────────────┘     └──────────────┘
+
+   Memory Access Patterns:
+   ┌────────────────────────────────────────────┐
+   │ Counter Updates: Lock-free atomic          │
+   │ ├─ Relaxed ordering                        │
+   │ └─ No contention                           │
+   │                                            │
+   │ Collection Updates: Lock-free DashMap      │
+   │ ├─ Concurrent reads                        │
+   │ └─ Concurrent writes                       │
+   │                                            │
+   │ Error Collection: Mutex-protected          │
+   │ ├─ Short-lived locks                       │
+   │ └─ Infrequent updates                      │
+   └────────────────────────────────────────────┘
+
+## 5. Reporter
+```
+   ┌──────────────────────────────────────┐
+   │ Reporter (reporter.rs)               │
+   │  ├─ Stats Formatter                  │
+   │  │   └─ format_stats()              │
+   │  │                                   │
+   │  └─ File Writer                      │
+   │      └─ async write_report()         │
+   └──────────────────────────────────────┘
+
+   Implementation Details:
+   ```rust
+   ┌─────────────────────────────────────────────────┐
+   │ // Reporter Structure                           │
+   │ pub struct Reporter {                           │
+   │     stats: Arc<Stats>,                         │
+   │     output_path: PathBuf,                      │
+   │     format_options: FormatOptions,             │
+   │ }                                              │
+   │                                                │
+   │ #[derive(Default)]                            │
+   │ pub struct FormatOptions {                     │
+   │     show_errors: bool,                         │
+   │     sort_by: SortOrder,                        │
+   │     human_readable: bool,                      │
+   │ }                                              │
+   └─────────────────────┬───────────────────────────┘
+                         │
+                         ▼
+   ┌─────────────────────────────────────────────────┐
+   │ // Stats Formatting                             │
+   │ impl Reporter {                                 │
+   │     fn format_size(&self, size: u64) -> String {│
+   │         if self.format_options.human_readable { │
+   │             match size {                        │
+   │                 s if s < 1024 => format!("{}B", s),
+   │                 s if s < 1024² => format!("{:.1}KB", s as f64 / 1024.0),
+   │                 s if s < 1024³ => format!("{:.1}MB", s as f64 / 1024.0²),
+   │                 s => format!("{:.1}GB", s as f64 / 1024.0³)
+   │             }                                   │
+   │         } else {                               │
+   │             size.to_string()                   │
+   │         }                                      │
+   │     }                                          │
+   │ }                                              │
+   └─────────────────────┬───────────────────────────┘
+                         │
+                         ▼
+   ┌─────────────────────────────────────────────────┐
+   │ // Report Sections                              │
+   │ impl Reporter {                                 │
+   │     async fn write_header(&self, w: &mut BufWriter<File>) -> Result<()> {
+   │         writeln!(w, "=== ZIP Analysis Report ===\n")?;
+   │         writeln!(w, "Generated: {}\n",          │
+   │             Local::now().format("%Y-%m-%d %H:%M:%S"))?;
+   │         Ok(())                                  │
+   │     }                                          │
+   │                                                │
+   │     async fn write_summary(&self, w: &mut BufWriter<File>) -> Result<()> {
+   │         let stats = &self.stats;               │
+   │         writeln!(w, "Summary:")?;              │
+   │         writeln!(w, "  Total size: {}", self.format_size(stats.total_size()))?;
+   │         writeln!(w, "  Files: {}", stats.total_files())?;
+   │         writeln!(w, "  Time: {:.2}s", stats.elapsed().as_secs_f64())?;
+   │         Ok(())                                 │
+   │     }                                          │
+   │ }                                              │
+   └─────────────────────┬───────────────────────────┘
+                         │
+                         ▼
+   ┌─────────────────────────────────────────────────┐
+   │ // Async File Writing                           │
+   │ impl Reporter {                                 │
+   │     pub async fn write_report(&self) -> Result<()> {
+   │         let file = File::create(&self.output_path).await?;
+   │         let mut writer = BufWriter::new(file); │
+   │         //    │                                │
+   │         //    └── Buffered async writing      │
+   │                                               │
+   │         self.write_header(&mut writer).await?; │
+   │         self.write_summary(&mut writer).await?;│
+   │         self.write_compression(&mut writer).await?;
+   │         self.write_methods(&mut writer).await?;│
+   │         self.write_types(&mut writer).await?;  │
+   │                                               │
+   │         if self.format_options.show_errors {  │
+   │             self.write_errors(&mut writer).await?;
+   │         }                                     │
+   │                                              │
+   │         writer.flush().await?;               │
+   │         Ok(())                               │
+   │     }                                        │
+   │ }                                            │
+   └─────────────────────────────────────────────────┘
+
+   Report Format Example:
+   ┌────────────────────────────────────────────┐
+   │ === ZIP Analysis Report ===                │
+   │ Generated: 2024-01-05 15:30:45            │
+   │                                            │
+   │ Summary:                                   │
+   │   Total size: 1.31 MB                     │
+   │   Files: 6                                │
+   │   Time: 0.29s                             │
+   │                                            │
+   │ Compression:                               │
+   │   Overall ratio: 23.7%                    │
+   │   Compressed: 1.00 MB                     │
+   │   Uncompressed: 1.31 MB                   │
+   │                                            │
+   │ Methods:                                   │
+   │   Store: 3 files                          │
+   │   Deflate: 3 files                        │
+   │                                            │
+   │ File Types:                                │
+   │   .zip: 6 files                           │
+   │                                            │
+   │ Files:                                     │
+   │   /path/to/file1.zip                      │
+   │   /path/to/file2.zip                      │
+   │   ...                                      │
+   └────────────────────────────────────────────┘
+
+   Data Flow:
+   ┌──────────────┐     ┌──────────────┐     ┌──────────────┐
+   │ Stats Data   │ ──► │ Formatter    │ ──► │ Report       │
+   │ Collection   │     │ Functions    │     │ Sections     │
+   └──────────────┘     └──────────────┘     └──────────────┘
+          │                     │                    │
+          │                     ▼                    ▼
+   ┌──────────────┐     ┌──────────────┐     ┌──────────────┐
+   │ Error        │ ──► │ Buffered     │ ──► │ Output       │
+   │ Handling     │     │ Writing      │     │ File         │
+   └──────────────┘     └──────────────┘     └──────────────┘
+
+# III. Test-Driven Development Plan
+
+## 1. Core ZIP Reading
+```
+   Test Implementation Order:
+   ┌─────────────────────────────────────────────────┐
+   │ 1.1 End Directory Location                      │
+   │     ├─ Test invalid ZIP detection              │
+   │     ├─ Test signature finding                  │
+   │     └─ Test error cases                        │
+   │                                                │
+   │ 1.2 Central Directory Parsing                  │
+   │     ├─ Test header parsing                     │
+   │     ├─ Test entry extraction                   │
+   │     └─ Test malformed directory handling       │
+   │                                                │
+   │ 1.3 Entry Stream Processing                    │
+   │     ├─ Test stream creation                    │
+   │     ├─ Test async iteration                    │
+   │     └─ Test resource cleanup                   │
+   └─────────────────────────────────────────────────┘
+
+   Example Test:
+   ```rust
+   #[tokio::test]
+   async fn test_end_directory_location() {
+       // GIVEN
+       let data = create_test_zip_with_entries(&[
+           ("file1.txt", b"content1"),
+           ("file2.txt", b"content2"),
+       ])?;
+
+       // WHEN
+       let reader = AsyncZipReader::new(data);
+       let end_dir_pos = reader.seek_end_directory().await?;
+
+       // THEN
+       assert_eq!(end_dir_pos, expected_position);
+       assert_valid_end_directory(&reader);
+   }
+   ```
+```
+
+## 2. Parallel Processing
+```
+   Test Implementation Order:
+   ┌─────────────────────────────────────────────────┐
+   │ 2.1 Thread Pool Management                      │
+   │     ├─ Test pool creation                      │
+   │     ├─ Test thread count limits                │
+   │     └─ Test resource allocation                │
+   │                                                │
+   │ 2.2 Entry Queue Processing                     │
+   │     ├─ Test queue bounds                       │
+   │     ├─ Test backpressure                       │
+   │     └─ Test concurrent access                  │
+   │                                                │
+   │ 2.3 Compression Methods                        │
+   │     ├─ Test Store method                       │
+   │     ├─ Test Deflate method                     │
+   │     └─ Test invalid method handling            │
+   └─────────────────────────────────────────────────┘
+
+   Example Test:
+   ```rust
+   #[test]
+   fn test_parallel_processing() {
+       // GIVEN
+       let pool = ParallelProcessor::new(4);
+       let data = generate_test_entries(1000);
+
+       // WHEN
+       let results = pool.process_entries(data)?;
+
+       // THEN
+       assert_eq!(results.len(), 1000);
+       assert!(results.iter().all(|r| r.is_valid()));
+       assert_no_thread_leaks();
+   }
+   ```
+```
+
+## 3. Stats Collection
+```
+   Test Implementation Order:
+   ┌─────────────────────────────────────────────────┐
+   │ 3.1 Atomic Counters                             │
+   │     ├─ Test concurrent updates                  │
+   │     ├─ Test overflow handling                   │
+   │     └─ Test ordering guarantees                 │
+   │                                                │
+   │ 3.2 Thread-Safe Collections                    │
+   │     ├─ Test concurrent map access              │
+   │     ├─ Test entry updates                      │
+   │     └─ Test race condition prevention          │
+   │                                                │
+   │ 3.3 Error Collection                           │
+   │     ├─ Test error recording                    │
+   │     ├─ Test concurrent error pushing           │
+   │     └─ Test error retrieval                    │
+   └─────────────────────────────────────────────────┘
+
+   Example Test:
+   ```rust
+   #[test]
+   fn test_concurrent_stats_updates() {
+       // GIVEN
+       let stats = Arc::new(Stats::default());
+       let threads: Vec<_> = (0..10).map(|_| {
+           let stats = Arc::clone(&stats);
+           thread::spawn(move || {
+               for _ in 0..1000 {
+                   stats.increment_files();
+               }
+           })
+       }).collect();
+
+       // WHEN
+       for thread in threads {
+           thread.join().unwrap();
+       }
+
+       // THEN
+       assert_eq!(stats.total_files(), 10000);
+   }
+   ```
+```
+
+## 4. Report Generation
+```
+   Test Implementation Order:
+   ┌─────────────────────────────────────────────────┐
+   │ 4.1 Stats Formatting                            │
+   │     ├─ Test size formatting                    │
+   │     ├─ Test time formatting                    │
+   │     └─ Test error formatting                   │
+   │                                                │
+   │ 4.2 Report Writing                             │
+   │     ├─ Test async file writing                 │
+   │     ├─ Test error handling                     │
+   │     └─ Test large report generation            │
+   │                                                │
+   │ 4.3 Format Options                             │
+   │     ├─ Test human readable output              │
+   │     ├─ Test sorting options                    │
+   │     └─ Test error visibility                   │
+   └─────────────────────────────────────────────────┘
+
+   Example Test:
+   ```rust
+   #[tokio::test]
+   async fn test_report_generation() {
+       // GIVEN
+       let stats = generate_test_stats();
+       let reporter = Reporter::new(stats, "report.txt");
+
+       // WHEN
+       reporter.write_report().await?;
+
+       // THEN
+       let content = fs::read_to_string("report.txt")?;
+       assert_contains_summary(&content);
+       assert_valid_formatting(&content);
+       assert_complete_stats(&content, &stats);
+   }
+   ```
+```
+
+## 5. Integration Testing
+```
+   Test Implementation Order:
+   ┌─────────────────────────────────────────────────┐
+   │ 5.1 End-to-End Processing                       │
+   │     ├─ Test small ZIP files                    │
+   │     ├─ Test large ZIP files                    │
+   │     └─ Test corrupted ZIP files                │
+   │                                                │
+   │ 5.2 Performance Testing                        │
+   │     ├─ Test memory usage                       │
+   │     ├─ Test processing speed                   │
+   │     └─ Test concurrent load                    │
+   │                                                │
+   │ 5.3 Error Scenarios                            │
+   │     ├─ Test IO errors                          │
+   │     ├─ Test memory limits                      │
+   │     └─ Test timeout handling                   │
+   └─────────────────────────────────────────────────┘
+
+   Example Test:
+   ```rust
+   #[tokio::test]
+   async fn test_end_to_end() {
+       // GIVEN
+       let input_path = "test_data/large.zip";
+       let output_path = "test_data/report.txt";
+       
+       // WHEN
+       let result = process_zip_file(input_path, output_path).await;
+
+       // THEN
+       assert!(result.is_ok());
+       assert_valid_report(output_path);
+       assert_performance_metrics();
+   }
+   ```
+```
+
+## 6. Property-Based Testing
+```
+   Test Implementation Order:
+   ┌─────────────────────────────────────────────────┐
+   │ 6.1 ZIP Structure Properties                    │
+   │     ├─ Test valid ZIP generation               │
+   │     ├─ Test structure invariants               │
+   │     └─ Test boundary conditions                │
+   │                                                │
+   │ 6.2 Processing Properties                      │
+   │     ├─ Test idempotency                        │
+   │     ├─ Test commutativity                      │
+   │     └─ Test associativity                      │
+   │                                                │
+   │ 6.3 Resource Properties                        │
+   │     ├─ Test memory bounds                      │
+   │     ├─ Test thread safety                      │
+   │     └─ Test cleanup guarantees                 │
+   └─────────────────────────────────────────────────┘
+
+   Example Test:
+   ```rust
+   #[test]
+   fn prop_zip_processing() {
+       proptest!(|(entries in zip_entry_strategy())| {
+           // GIVEN
+           let zip_data = create_zip_from_entries(&entries)?;
+           
+           // WHEN
+           let stats = process_zip_data(&zip_data)?;
+           
+           // THEN
+           assert_eq!(stats.total_files(), entries.len());
+           assert!(stats.total_size() >= stats.compressed_size());
+           assert_valid_compression_ratio(stats.ratio());
+       });
+   }
+   ```
+```
+
+# IV. Safety Considerations and Bug Prevention
+
+## 1. Memory Safety
+```
+   ┌─────────────────────────────────────────────────┐
+   │ // Resource Management                          │
+   │ impl Drop for AsyncZipReader {                  │
+   │     fn drop(&mut self) {                       │
+   │         // Ensure all buffers are freed        │
+   │         self.buffer.clear();                   │
+   │         // Close file handles                  │
+   │         if let Err(e) = self.file.sync_all() { │
+   │             log::error!("Failed to sync: {}", e);
+   │         }                                      │
+   │     }                                          │
+   │ }                                              │
+   └─────────────────────────────────────────────────┘
+
+## 2. Concurrency Safety
+```
+   ┌─────────────────────────────────────────────────┐
+   │ // Thread-Safe Operations                       │
+   │ impl ParallelProcessor {                        │
+   │     fn process_chunk(&self, chunk: Vec<u8>) {  │
+   │         // Use proper memory ordering          │
+   │         self.processed.fetch_add(              │
+   │             chunk.len(),                       │
+   │             Ordering::Release  // Not Relaxed  │
+   │         );                                     │
+   │                                               │
+   │         // Avoid long-held locks              │
+   │         let stats = {                         │
+   │             let guard = self.stats.lock()?;   │
+   │             guard.clone()                     │
+   │         };  // Lock released here             │
+   │         process_stats(stats);                 │
+   │     }                                         │
+   │ }                                             │
+   └─────────────────────────────────────────────────┘
+
+## 3. Error Handling
+```
+   ┌─────────────────────────────────────────────────┐
+   │ // Rich Error Context                           │
+   │ #[derive(Debug, thiserror::Error)]             │
+   │ pub enum ZipError {                            │
+   │     #[error("IO error at offset {offset}: {source}")]
+   │     Io {                                       │
+   │         source: std::io::Error,               │
+   │         offset: u64,                          │
+   │     },                                        │
+   │     #[error("Invalid ZIP signature: {0:#x}")]  │
+   │     InvalidSignature(u32),                    │
+   │     #[error("Buffer overflow: {size} > {max}")] │
+   │     BufferOverflow {                          │
+   │         size: usize,                          │
+   │         max: usize,                          │
+   │     },                                        │
+   │ }                                             │
+   └─────────────────────────────────────────────────┘
+
+## 4. Validation and Bounds Checking
+```
+   ┌─────────────────────────────────────────────────┐
+   │ // Safe Buffer Access                           │
+   │ impl AsyncZipReader {                           │
+   │     fn read_chunk(&mut self, size: usize)      │
+   │         -> Result<&[u8], ZipError>             │
+   │     {                                          │
+   │         // Validate size before allocation     │
+   │         if size > MAX_CHUNK_SIZE {            │
+   │             return Err(ZipError::BufferOverflow {
+   │                 size,                          │
+   │                 max: MAX_CHUNK_SIZE,           │
+   │             });                               │
+   │         }                                     │
+   │                                               │
+   │         // Safe buffer access                 │
+   │         self.buffer.resize(size, 0);          │
+   │         self.file.read_exact(&mut self.buffer)?;
+   │         Ok(&self.buffer)                      │
+   │     }                                         │
+   │ }                                             │
+   └─────────────────────────────────────────────────┘
+
+## 5. Resource Management
+```
+   ┌─────────────────────────────────────────────────┐
+   │ // RAII Pattern Implementation                  │
+   │ pub struct BufferGuard<'a> {                   │
+   │     pool: &'a BufferPool,                      │
+   │     buffer: Option<Vec<u8>>,                   │
+   │ }                                              │
+   │                                                │
+   │ impl<'a> Drop for BufferGuard<'a> {           │
+   │     fn drop(&mut self) {                      │
+   │         if let Some(buf) = self.buffer.take() {│
+   │             self.pool.return_buffer(buf);      │
+   │         }                                      │
+   │     }                                         │
+   │ }                                             │
+   └─────────────────────────────────────────────────┘
+
+## 6. Race Condition Prevention
+```
+   ┌─────────────────────────────────────────────────┐
+   │ // Thread-Safe State Updates                    │
+   │ impl Stats {                                    │
+   │     pub fn update(&self, entry: &ZipEntry) {   │
+   │         // Atomic counter updates              │
+   │         self.total_files.fetch_add(1,          │
+   │             Ordering::Release);                │
+   │                                               │
+   │         // Thread-safe map updates            │
+   │         self.methods.entry(entry.method)      │
+   │             .and_modify(|e| *e += 1)          │
+   │             .or_insert(1);                    │
+   │                                               │
+   │         // Proper lock ordering              │
+   │         if let Ok(mut errors) = self.errors.try_lock() {
+   │             if let Err(e) = entry.validate() { │
+   │                 errors.push(e);               │
+   │             }                                 │
+   │         }                                     │
+   │     }                                         │
+   │ }                                             │
+   └─────────────────────────────────────────────────┘
+
+# V. Resource Management
+
+## 1. Memory Allocation
+```
+   Component          Allocation Strategy    Lifetime
+   ─────────        ───────────────────   ──────────
+   
+   ZIP Reader   ──► RAII + Arc          ──► 'static
+   Entry Data   ──► Thread-local Buffer ──► Scoped
+   Stats        ──► Arc + Atomic        ──► 'static
+   Progress     ──► Atomic Updates      ──► 'static
+
+## 2. File Handles
+```
+   ┌─────────────────────────────────────────────────┐
+   │ // File Handle Management                       │
+   │ impl AsyncZipReader {                           │
+   │     fn open_file(&mut self) -> Result<()> {    │
+   │         self.file = File::open(&self.path)?;   │
+   │         Ok(())                                  │
+   │     }                                          │
+   │ }                                              │
+   └─────────────────────────────────────────────────┘
+
+## 3. Thread Pool
+```
+   ┌─────────────────────────────────────────────────┐
+   │ // Thread Pool Management                       │
+   │ impl ParallelProcessor {                        │
+   │     fn new() -> Self {                         │
+   │         let pool = rayon::ThreadPoolBuilder::new()
+   │             .num_threads(num_cpus::get())      │
+   │             .stack_size(5 * 1024 * 1024)       │
+   │             .build()                           │
+   │             .expect("Failed to build pool");   │
+   │         Self { pool, ... }                    │
+   │     }                                          │
+   │ }                                              │
+   └─────────────────────────────────────────────────┘
+
+# VI. Error Handling
+
+## 1. Error Types
+```
+   ┌─────────────────────────────────────────────────┐
+   │ // Error Type Definitions                       │
+   │ #[derive(Debug, thiserror::Error)]             │
+   │ pub enum ZipError {                            │
+   │     #[error("IO error: {0}")]                  │
+   │     Io(#[from] std::io::Error),               │
+   │     #[error("Invalid ZIP signature: {0:#x}")]  │
+   │     InvalidSignature(u32),                    │
+   │     #[error("Buffer overflow: {size} > {max}")] │
+   │     BufferOverflow {                          │
+   │         size: usize,                          │
+   │         max: usize,                          │
+   │     },                                        │
+   │ }                                             │
+   └─────────────────────────────────────────────────┘
+
+## 2. Error Propagation
+```
+   ┌─────────────────────────────────────────────────┐
+   │ // Error Propagation                            │
+   │ impl AsyncZipReader {                           │
+   │     fn read_entry(&mut self) -> Result<ZipEntry> {
+   │         // ...                                  │
+   │         match self.read_cd_entry().await? {    │
+   │             Some(entry) => Ok(entry),          │
+   │             None => Err(ZipError::InvalidSignature(
+   │                 self.read_u32().await?)),      │
+   │         }                                      │
+   │     }                                          │
+   │ }                                              │
+   └─────────────────────────────────────────────────┘
+
+## 3. Recovery Strategies
+```
+   ┌─────────────────────────────────────────────────┐
+   │ // Recovery Strategies                          │
+   │ impl AsyncZipReader {                           │
+   │     fn recover_from_error(&mut self, e: ZipError) {
+   │         match e {                               │
+   │             ZipError::Io(e) => // Handle IO errors
+   │             ZipError::InvalidSignature(_) => // Handle invalid signature
+   │             ZipError::BufferOverflow { .. } => // Handle buffer overflow
+   │         }                                      │
+   │     }                                          │
+   │ }                                              │
+   └─────────────────────────────────────────────────┘
+
+# VII. Test Data Strategy
+
+## 1. Test Data Structure
+```
+   test_data/
+   ├── 1mb.zip     # Standard test file
+   ├── 10mb.zip    # Large file test
+   ├── corrupted.zip  # Error handling test
+   ├── README.md   # Test data documentation
+   └── generate_test_data.py  # Test data generator
+
+   Test Data Categories:
+   ┌─────────────────────────────────────────────────┐
+   │ 1. Size-based Test Files                        │
+   │    ├─ 1MB ZIP (baseline testing)               │
+   │    └─ 10MB ZIP (performance testing)           │
+   │                                                │
+   │ 2. Error Condition Files                       │
+   │    ├─ Corrupted ZIP (error handling)          │
+   │    └─ Invalid signatures                      │
+   │                                                │
+   │ 3. Generated Test Cases                        │
+   │    ├─ Random content                          │
+   │    ├─ Various compression methods             │
+   │    └─ Different file structures               │
+   └─────────────────────────────────────────────────┘
+```
+
+## 2. Test Data Generation
+```
+   ┌─────────────────────────────────────────────────┐
+   │ // Test Data Generator                          │
+   │ impl TestDataGenerator {                        │
+   │     fn generate_zip(&self, config: TestConfig) {│
+   │         // File structure generation           │
+   │         let files = self.create_file_tree(     │
+   │             config.depth,                      │
+   │             config.files_per_dir               │
+   │         );                                     │
+   │                                               │
+   │         // Content generation                 │
+   │         for file in files {                   │
+   │             self.generate_content(            │
+   │                 file,                         │
+   │                 config.content_type,          │
+   │                 config.size_range             │
+   │             );                               │
+   │         }                                    │
+   │                                             │
+   │         // Compression method application    │
+   │         self.apply_compression(             │
+   │             files,                          │
+   │             config.compression_methods      │
+   │         );                                  │
+   │     }                                      │
+   │ }                                          │
+   └─────────────────────────────────────────────────┘
+```
+
+## 3. Test Scenarios
+```
+   1. Size-Based Testing
+   ┌─────────────────────────────────────────────────┐
+   │ #[tokio::test]                                  │
+   │ async fn test_size_based_processing() {         │
+   │     // Test with 1MB file                      │
+   │     test_with_file("1mb.zip").await?;          │
+   │                                                │
+   │     // Test with 10MB file                     │
+   │     test_with_file("10mb.zip").await?;         │
+   │ }                                              │
+   └─────────────────────────────────────────────────┘
+
+   2. Error Handling Testing
+   ┌─────────────────────────────────────────────────┐
+   │ #[tokio::test]                                  │
+   │ async fn test_error_handling() {                │
+   │     // Test with corrupted ZIP                 │
+   │     let result = process_zip("corrupted.zip").await;
+   │     assert!(matches!(                          │
+   │         result,                               │
+   │         Err(ZipError::InvalidSignature(_))    │
+   │     ));                                       │
+   │ }                                              │
+   └─────────────────────────────────────────────────┘
+
+   3. Performance Testing
+   ┌─────────────────────────────────────────────────┐
+   │ #[tokio::test]                                  │
+   │ async fn test_performance() {                   │
+   │     let start = Instant::now();                │
+   │     process_zip("10mb.zip").await?;            │
+   │     let duration = start.elapsed();            │
+   │     assert!(duration < Duration::from_secs(1)); │
+   │ }                                              │
+   └─────────────────────────────────────────────────┘
+```
+
+## 4. Test Data Maintenance
+```
+   Test Data Update Process:
+   ┌─────────────────────────────────────────────────┐
+   │ 1. Regular Updates                              │
+   │    ├─ Monthly regeneration of test files       │
+   │    ├─ Version control of test data             │
+   │    └─ Automated validation                     │
+   │                                                │
+   │ 2. Validation Checks                           │
+   │    ├─ File integrity verification             │
+   │    ├─ Size constraints check                  │
+   │    └─ Content diversity analysis              │
+   │                                                │
+   │ 3. Documentation                               │
+   │    ├─ Test data purpose                       │
+   │    ├─ Generation parameters                    │
+   │    └─ Usage instructions                      │
+   └─────────────────────────────────────────────────┘
+```
+
+## 5. Test Coverage Matrix
+```
+   Feature vs Test Data Coverage:
+   ┌────────────────┬────────┬─────────┬──────────┐
+   │ Feature        │ 1mb.zip│ 10mb.zip│corrupted │
+   ├────────────────┼────────┼─────────┼──────────┤
+   │ Basic Reading  │   ✓    │    ✓    │    ✓     │
+   │ Parallel Proc  │   ✓    │    ✓    │    -     │
+   │ Error Handling │   -    │    -    │    ✓     │
+   │ Memory Usage   │   ✓    │    ✓    │    -     │
+   │ Performance    │   -    │    ✓    │    -     │
+   └────────────────┴────────┴─────────┴──────────┘
+```
+
+## 6. Test Data Generation Script
+```python
+#!/usr/bin/env python3
+"""
+Test Data Generator for ZIP-Revelio
+
+This script generates test data files with various characteristics:
+- Different sizes (1MB, 10MB)
+- Various compression methods
+- Corrupted files for error testing
+- Different file structures and content types
+"""
+
+import os
+import random
+import zipfile
+from pathlib import Path
+
+class TestDataGenerator:
+    def __init__(self, output_dir: Path):
+        self.output_dir = output_dir
+        
+    def generate_standard_files(self):
+        """Generate 1MB and 10MB test files"""
+        self.generate_zip_file("1mb.zip", 1024 * 1024)
+        self.generate_zip_file("10mb.zip", 10 * 1024 * 1024)
+        
+    def generate_corrupted_file(self):
+        """Generate corrupted ZIP for error testing"""
+        path = self.output_dir / "corrupted.zip"
+        with path.open("wb") as f:
+            f.write(b"PK\x03\x04")  # Valid signature
+            f.write(os.urandom(1024))  # Random corrupt data
+            
+    def generate_zip_file(self, name: str, size: int):
+        """Generate ZIP file with specified size"""
+        path = self.output_dir / name
+        with zipfile.ZipFile(path, "w") as zf:
+            remaining = size
+            while remaining > 0:
+                chunk_size = min(remaining, 1024 * 64)
+                data = os.urandom(chunk_size)
+                zf.writestr(f"file_{remaining}.dat", data)
+                remaining -= chunk_size
+
+if __name__ == "__main__":
+    generator = TestDataGenerator(Path("test_data"))
+    generator.generate_standard_files()
+    generator.generate_corrupted_file()
+```
+
+This comprehensive test data strategy ensures:
+1. Consistent test environment
+2. Coverage of edge cases
+3. Performance validation
+4. Error handling verification
+5. Reproducible test scenarios
+
+```
+
+# VIII. Implementation Status
+
+## 1. Core Components 
+All core components have been implemented with comprehensive error handling and thread safety:
+
+1. AsyncZipReader
+   - Efficient async file reading
+   - Signature-based directory location
+   - Entry streaming
+   - Buffer management (64KB)
+   - Error context with offsets
+
+2. ParallelProcessor
+   - Rayon thread pool integration
+   - Safe error propagation
+   - Memory-efficient processing
+   - Compression method handling
+   - Stats collection integration
+
+3. Stats Collection
+   - Thread-safe atomic counters
+   - DashMap for method tracking
+   - Mutex-protected error collection
+   - Performance metrics
+   - Memory-safe cloning
+
+4. Reporter
+   - Async file writing
+   - Comprehensive reporting
+   - Error summaries
+   - Performance metrics
+   - Human-readable output
+
+5. CLI Interface
+   - Clap-based argument parsing
+   - Progress bar integration
+   - Configuration management
+   - Error handling
+   - Help documentation
+
+## 2. Error Handling Improvements 
+
+1. ZipError Enhancements
+   - Arc-wrapped IO errors for thread safety
+   - Detailed error context
+   - Clone implementation
+   - Offset tracking
+   - Method validation
+
+2. Error Propagation
+   - Async-aware error handling
+   - Thread pool error management
+   - Safe error collection
+   - Context preservation
+   - Recovery strategies
+
+## 3. Thread Safety Enhancements 
+
+1. Atomic Operations
+   - Counter updates
+   - Size tracking
+   - Method recording
+   - Performance metrics
+   - Memory ordering
+
+2. Concurrent Collections
+   - DashMap for methods
+   - Mutex for errors
+   - Arc for sharing
+   - Buffer management
+   - Resource cleanup
+
+## 4. Memory Management 
+
+1. Buffer Strategy
+   - 64KB default size
+   - Dynamic allocation
+   - RAII cleanup
+   - Efficient reuse
+   - Bounds checking
+
+2. Resource Management
+   - File handle cleanup
+   - Thread pool shutdown
+   - Memory limits
+   - Buffer pooling
+   - Safe sharing
+
+## 5. Testing Infrastructure 
+
+1. Unit Tests
+   - AsyncZipReader tests
+   - ParallelProcessor tests
+   - Stats collection tests
+   - Reporter tests
+   - CLI parsing tests
+
+2. Integration Tests
+   - End-to-end processing
+   - Error handling
+   - Performance validation
+   - Memory usage
+   - Thread safety
+
+3. Benchmark Tests
+   - 1MB file processing
+   - 10MB file processing
+   - Thread pool scaling
+   - Memory efficiency
+   - Error scenarios
+
+## 6. Documentation 
+
+1. Code Documentation
+   - Module documentation
+   - Function documentation
+   - Error documentation
+   - Type documentation
+   - Example usage
+
+2. Architecture Documentation
+   - Component overview
+   - Error handling
+   - Thread safety
+   - Memory management
+   - Testing strategy
+
+## 7. Performance Optimization 
+
+1. Async Processing
+   - Non-blocking IO
+   - Efficient buffering
+   - Task scheduling
+   - Resource sharing
+   - Error handling
+
+2. Parallel Processing
+   - Thread pool management
+   - Work distribution
+   - Backpressure handling
+   - Resource limits
+   - Error propagation
+
+## 8. Future Improvements 
+
+1. Compression Support
+   - Additional methods
+   - Custom handlers
+   - Performance tuning
+   - Error handling
+   - Testing coverage
+
+2. Progress Tracking
+   - Detailed progress
+   - ETA calculation
+   - Resource usage
+   - Error reporting
+   - Cancel support
+
+3. Report Formats
+   - JSON output
+   - CSV output
+   - Custom templates
+   - Error details
+   - Performance metrics
+
+## 9. Dependencies 
+
+1. Core Dependencies
+   - tokio 1.35.1
+   - rayon 1.8.0
+   - clap 4.4.11
+   - bytes 1.5.0
+   - flate2 1.0.28
+
+2. Error Handling
+   - thiserror 1.0.50
+   - tracing 0.1.40
+   - tracing-subscriber 0.3.18
+
+3. Collections
+   - dashmap 5.5.3
+   - bytes 1.5.0
+
+4. Development
+   - proptest 1.3.1
+   - criterion 0.5.1
+   - tempfile 3.8.1
+   - test-case 3.3.1
+
+## 10. Build Configuration 
+
+1. Release Profile
+   - LTO enabled
+   - Single codegen unit
+   - Panic=abort
+   - Strip symbols
+   - Optimizations
+
+2. Development Profile
+   - Debug symbols
+   - Level 1 optimization
+   - Stack traces
+   - Fast compilation
+
+This implementation provides a solid foundation for ZIP file analysis with:
+- Memory safety
+- Thread safety
+- Error resilience
+- Performance optimization
+- Comprehensive testing
+
+The codebase is now ready for:
+1. Production use
+2. Further optimization
+3. Feature expansion
+4. Community contribution
+5. Performance tuning
+
+```
+
+# IX. Learning from Implementation Challenges 🎓
+
+## 1. ZIP File Reading Improvements
+
+1. Central Directory Navigation
+   - Initially missed reading the end of central directory record properly
+   - Added proper parsing of directory record fields
+   - Implemented correct seeking to central directory start
+   - Fixed file position tracking
+
+2. Data Buffer Management
+   - Added buffer reuse for efficiency
+   - Implemented proper buffer resizing
+   - Added buffer cleanup in Drop implementation
+   - Exposed buffer access via safe methods
+
+3. Local File Headers
+   - Added local header validation
+   - Implemented proper header field skipping
+   - Added data offset calculation
+   - Improved error handling for corrupted headers
+
+## 2. Concurrency Fixes
+
+1. Thread Safety
+   - Fixed Clone implementation conflicts
+   - Moved Clone derive to the correct location
+   - Improved Arc usage for shared data
+   - Fixed thread-safe error collection
+
+2. Task Synchronization
+   - Added yield points for better scheduling
+   - Implemented proper task waiting
+   - Fixed race conditions in stats collection
+   - Added sleep for task completion
+
+3. Error Propagation
+   - Improved error context preservation
+   - Added thread-safe error wrapping
+   - Fixed error collection in parallel tasks
+   - Enhanced error reporting
+
+## 3. Memory Management
+
+1. Buffer Strategy
+   - Implemented efficient buffer reuse
+   - Added proper buffer sizing
+   - Fixed memory leaks in error paths
+   - Improved RAII compliance
+
+2. Resource Cleanup
+   - Added proper Drop implementations
+   - Fixed resource leaks
+   - Implemented safe buffer clearing
+   - Added error handling in cleanup
+
+## 4. Test Improvements
+
+1. Test Data Generation
+   - Added realistic directory structure
+   - Implemented varied file sizes
+   - Added multiple compression methods
+   - Fixed path handling issues
+
+2. Test Coverage
+   - Added end-to-end tests
+   - Improved error case testing
+   - Added concurrent operation tests
+   - Enhanced test data validation
+
+## 5. Key Lessons
+
+1. Data Flow
+   - Importance of proper buffer management
+   - Need for careful position tracking
+   - Critical role of synchronization
+   - Value of RAII principles
+
+2. Error Handling
+   - Necessity of thread-safe error types
+   - Importance of error context
+   - Need for comprehensive error testing
+   - Value of error recovery strategies
+
+3. Testing Strategy
+   - Importance of realistic test data
+   - Need for concurrent testing
+   - Value of end-to-end tests
+   - Importance of error case coverage
+
+4. Code Organization
+   - Benefits of clear module boundaries
+   - Importance of proper trait implementations
+   - Value of consistent error handling
+   - Need for careful resource management
+
+These lessons have led to a more robust, reliable, and maintainable implementation, with better error handling, improved performance, and more comprehensive testing.
+
+```
+
+# X. Enhanced Architecture Specifications 🔄
+
+## 1. Component Interaction Model
+
+```
+                    Data Flow and Ownership
+                    ======================
+
+┌─────────────┐     ┌───────────┐     ┌────────────┐
+│ ZIP Reader  │────►│  Buffer   │────►│ Processor  │
+│  (async)    │     │   Pool    │     │ (parallel) │
+└─────────────┘     └───────────┘     └────────────┘
+       │                  ▲                  │
+       │                  │                  │
+       │            ┌─────┴──────┐          │
+       └──────────►│   Stats    │◄─────────┘
+                  │ Collection  │
+                  └────────────┘
+```
+
+## 2. Memory Management Strategy
+
+### 2.1 Buffer Pool Architecture
+```
+┌────────────────────────────────────────────┐
+│               Buffer Pool                   │
+├──────────────┬───────────────┬─────────────┤
+│ Active (64K) │ Ready (64K)   │ Free Space  │
+│  In Use      │ Available     │ Unallocated │
+└──────────────┴───────────────┴─────────────┘
+```
+
+### 2.2 Resource Limits
+1. Per-Thread Resources
+   - Stack Size: 5MB
+   - Buffer Size: 64KB
+   - Local Cache: 1MB
+
+2. Global Resources
+   - Max Buffers: Thread Count × 2
+   - Error Store: Unbounded
+   - Stats Store: Fixed Size
+
+## 3. Concurrency Control
+
+### 3.1 Thread Architecture
+```
+                 Main Thread (tokio)
+                        │
+        ┌───────────────┴──────────────┐
+        │                              │
+   ZIP Reader                     Progress Bar
+   (async I/O)                    (async UI)
+        │
+        │
+   ┌────▼─────┐
+   │  Rayon   │
+   │Thread Pool│
+   └────┬─────┘
+        │
+   ┌────▼─────┐
+   │ Worker   │ × N threads
+   │ Threads  │
+   └──────────┘
+```
+
+### 3.2 Synchronization Points
+1. Data Handoff
+   ```
+   Reader Thread ──(BytesMut)──► Worker Thread
+        ▲                            │
+        └───(Position Update)────────┘
    ```
 
-3. I/O Optimization
-   - Memory mapping
-   - Batch processing
-   - Buffer pooling
-   - Minimal allocation
+2. Stats Updates
+   ```
+   Worker Thread ──(Atomic)──► Stats Counter
+                ──(Mutex)───► Error Store
+   ```
 
-## Error Handling Strategy 🛡️
+## 4. Error Management
 
+### 4.1 Error Flow
 ```
-Error Type          Action
-┌─────────────┐
-│File Error   │ → Skip & Continue
-├─────────────┤
-│Memory Error │ → Reduce Threads
-├─────────────┤
-│Fatal Error  │ → Stop & Report
-└─────────────┘
+1. Detection
+   Component ──► Error Type ──► Error Store
+
+2. Collection
+   Error Store ──► Reporter ──► Report File
+
+3. Recovery
+   Error ──► Skip Entry ──► Continue Processing
 ```
 
-## Security Considerations 🔒
+### 4.2 Error Categories
+1. I/O Errors
+   - File access
+   - Buffer overflow
+   - Network timeout
 
-1. Input Validation
-   - ZIP format verification
-   - ASCII filenames only
-   - 4GB file size limit
-   - Store/Deflate only
+2. Format Errors
+   - Invalid signature
+   - CRC mismatch
+   - Unsupported method
 
-2. Resource Protection
-   - Memory limits per thread
-   - Adaptive thread count
-   - Buffer pool limits
-   - Graceful shutdown
+3. Resource Errors
+   - Memory allocation
+   - Thread creation
+   - Pool exhaustion
+
+## 5. Performance Optimization
+
+### 5.1 Buffer Strategy
+1. Reuse Policy
+   - Keep hot buffers
+   - Preallocate common sizes
+   - Clear on return
+
+2. Memory Layout
+   - Align to cache lines
+   - Minimize fragmentation
+   - Batch allocations
+
+### 5.2 Thread Tuning
+1. Pool Configuration
+   - Dynamic sizing
+   - Work stealing
+   - Priority scheduling
+
+2. Load Balancing
+   - Entry distribution
+   - Buffer management
+   - Error handling
+
+## 6. Testing Framework
+
+### 6.1 Test Categories
+1. Unit Tests
+   - Component isolation
+   - Error paths
+   - Edge cases
+
+2. Integration Tests
+   - Component interaction
+   - Resource management
+   - Error propagation
+
+3. Performance Tests
+   - Throughput measurement
+   - Memory profiling
+   - Concurrency scaling
+
+### 6.2 Test Data Generation
+```python
+class TestDataGenerator:
+    def generate_files(self):
+        # Standard test files
+        self.create_zip("1mb.zip", 1024 * 1024)
+        self.create_zip("10mb.zip", 10 * 1024 * 1024)
+        
+        # Error test files
+        self.create_corrupted("invalid.zip")
+        self.create_encrypted("secure.zip")
+```
+
+These enhancements provide a more robust and detailed architecture that better supports our implementation goals of high performance, memory safety, and reliable error handling.
