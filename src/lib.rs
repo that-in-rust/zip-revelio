@@ -1,5 +1,4 @@
 use thiserror::Error;
-use zip::result::ZipResult;
 
 pub const MAX_SIZE: u64 = 4 * 1024 * 1024 * 1024; // 4GB
 
@@ -14,8 +13,6 @@ pub enum Error {
     Io(#[from] std::io::Error),
     #[error("Invalid ZIP format: {0}")]
     Format(String),
-    #[error("ZIP error: {0}")]
-    Zip(#[from] ZipResult),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -43,6 +40,7 @@ mod tests {
     use super::*;
     use tempfile::NamedTempFile;
     use tokio::fs::File;
+    use std::os::unix::fs::FileExt;
 
     struct TestZipReader {
         path: std::path::PathBuf,
@@ -75,9 +73,13 @@ mod tests {
     #[tokio::test]
     async fn test_size_limit() -> Result<()> {
         let file = NamedTempFile::new()?;
-        let f = File::create(file.path()).await?;
-        f.set_len(MAX_SIZE + 1).await?;
-
+        // Create a sparse file by setting the length without writing data
+        let f = std::fs::OpenOptions::new()
+            .write(true)
+            .open(file.path())?;
+        // Just write a single byte at MAX_SIZE + 1 to create a sparse file
+        f.set_len(MAX_SIZE + 1)?;
+        
         let reader = TestZipReader::new(file.path());
         let result = reader.validate_size().await;
 

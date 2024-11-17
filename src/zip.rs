@@ -1,7 +1,8 @@
 use crate::{Directory, Entry, Error, Result, ZipReader};
 use rayon::prelude::*;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::Arc;
+use parking_lot::Mutex;
 use tokio::fs::File;
 use zip::ZipArchive;
 
@@ -34,12 +35,17 @@ impl ZipReader for FileZipReader {
         
         let archive = ZipArchive::new(std_file)
             .map_err(|e| Error::Format(e.to_string()))?;
-        let archive = Mutex::new(archive);
         
-        let entries: Vec<Entry> = (0..archive.lock().unwrap().len())
+        // Get the length once to avoid locking
+        let len = archive.len();
+        let archive = Arc::new(Mutex::new(archive));
+        
+        let entries: Vec<Entry> = (0..len)
             .into_par_iter()
             .filter_map(|i| {
-                archive.lock().unwrap().by_index(i).ok().map(|entry| Entry {
+                // Minimize the mutex lock duration
+                let entry = archive.lock().by_index(i).ok()?;
+                Some(Entry {
                     name: entry.name().to_owned(),
                     size: entry.size(),
                     compressed_size: entry.compressed_size(),

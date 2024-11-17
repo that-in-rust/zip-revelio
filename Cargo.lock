@@ -1117,6 +1117,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "indicatif",
+ "parking_lot",
  "pretty_assertions",
  "rayon",
  "structopt",

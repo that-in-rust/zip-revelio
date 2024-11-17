@@ -2,7 +2,7 @@ use anyhow::Result;
 use indicatif::{ProgressBar, ProgressStyle};
 use std::path::PathBuf;
 use structopt::StructOpt;
-use zip_revelio::FileZipReader;
+use zip_revelio::{FileZipReader, ZipReader};
 
 #[derive(StructOpt, Debug)]
 #[structopt(name = "zip-revelio")]
