@@ -1,0 +1,794 @@
+# AST (Abstract Syntax Tree) Research Document
+## Focus: Rust & Java Implementation
+
+### 1. AST Libraries & Tools
+
+#### Rust Ecosystem
+1. **rust-analyzer**
+   - URL: https://github.com/rust-analyzer/rust-analyzer
+   - Primary use: IDE support and code analysis
+   - Features:
+     * Real-time parsing
+     * Semantic analysis
+     * Cross-reference tracking
+   - Integration: LSP protocol support
+
+2. **syn**
+   - URL: https://github.com/dtolnay/syn
+   - Primary use: Rust code parsing
+   - Features:
+     * Full syntax tree parsing
+     * Macro support
+     * Token stream processing
+
+3. **Tree-sitter**
+   - URL: https://github.com/tree-sitter/tree-sitter
+   - Language agnostic but great Rust support
+   - Features:
+     * Incremental parsing
+     * Error recovery
+     * Multiple language support
+
+#### Java Ecosystem
+1. **JavaParser**
+   - URL: https://github.com/javaparser/javaparser
+   - Primary use: Java code analysis
+   - Features:
+     * Full AST generation
+     * Symbol resolution
+     * Type solving
+
+2. **Eclipse JDT Core**
+   - URL: https://github.com/eclipse/eclipse.jdt.core
+   - Primary use: Full Java development tooling
+   - Features:
+     * Complete Java model
+     * Code manipulation
+     * Search engine
+
+### 2. Multi-File Analysis Capabilities
+
+#### Approach 1: Parallel Processing
+```rust
+pub struct CodebaseAnalyzer {
+    pub max_threads: usize,
+    pub chunk_size: usize,
+}
+
+impl CodebaseAnalyzer {
+    pub fn analyze_codebase(&self, root_dir: &Path) -> Result<CodebaseAST> {
+        // 1. File Discovery
+        let files = WalkDir::new(root_dir)
+            .into_iter()
+            .filter_map(Result::ok)
+            .filter(|e| e.file_type().is_file())
+            .collect::<Vec<_>>();
+
+        // 2. Parallel Processing
+        let (tx, rx) = channel();
+        let pool = ThreadPool::new(self.max_threads);
+
+        for chunk in files.chunks(self.chunk_size) {
+            let tx = tx.clone();
+            pool.execute(move || {
+                let ast = process_files(chunk);
+                tx.send(ast).unwrap();
+            });
+        }
+
+        // 3. Result Aggregation
+        self.aggregate_results(rx)
+    }
+}
+```
+
+#### Approach 2: Incremental Analysis
+```rust
+pub struct IncrementalAnalyzer {
+    cache: Cache<PathBuf, AST>,
+    dirty_files: HashSet<PathBuf>,
+}
+
+impl IncrementalAnalyzer {
+    pub fn update(&mut self, changed_files: &[PathBuf]) {
+        // 1. Mark affected files
+        let affected = self.find_affected_files(changed_files);
+        self.dirty_files.extend(affected);
+
+        // 2. Reanalyze only what's needed
+        for file in &self.dirty_files {
+            self.reanalyze_file(file);
+        }
+    }
+}
+```
+
+### 3. Practical Applications
+
+#### 1. Code Navigation
+```rust
+pub trait CodeNavigator {
+    // Find all references to a symbol
+    fn find_references(&self, symbol: &str) -> Vec<Location>;
+    
+    // Find symbol definition
+    fn find_definition(&self, symbol: &str) -> Option<Location>;
+    
+    // Find all implementations
+    fn find_implementations(&self, trait_name: &str) -> Vec<Implementation>;
+}
+```
+
+#### 2. Impact Analysis
+```rust
+pub struct ImpactAnalyzer {
+    pub fn analyze_change(&self, file: &Path) -> ChangeImpact {
+        // 1. Parse changed file
+        let ast = self.parser.parse(file);
+        
+        // 2. Find dependencies
+        let deps = self.find_dependencies(&ast);
+        
+        // 3. Analyze impact
+        self.calculate_impact(deps)
+    }
+}
+```
+
+#### 3. Security Analysis
+```rust
+pub struct SecurityAnalyzer {
+    pub fn scan_codebase(&self) -> Vec<SecurityIssue> {
+        // 1. Load security patterns
+        let patterns = self.load_security_patterns();
+        
+        // 2. Scan AST for matches
+        self.ast.traverse(|node| {
+            self.check_security_patterns(node, &patterns)
+        })
+    }
+}
+```
+
+### 4. Performance Considerations
+
+1. **Memory Management**
+   ```rust
+   pub struct ASTManager {
+       // LRU cache for frequently accessed ASTs
+       ast_cache: LruCache<PathBuf, Ast>,
+       // Memory limit in bytes
+       memory_limit: usize,
+   }
+   ```
+
+2. **Processing Strategy**
+   - Files < 1MB: Full parse
+   - Files 1MB-10MB: Incremental parse
+   - Files > 10MB: Lazy loading
+
+3. **Caching Strategy**
+   ```rust
+   pub struct CacheStrategy {
+       // Hot path: Frequently accessed files
+       hot_cache: HashMap<PathBuf, Ast>,
+       // Warm path: Recently modified files
+       warm_cache: LruCache<PathBuf, Ast>,
+       // Cold path: Disk storage
+       cold_storage: DiskCache<PathBuf, Ast>,
+   }
+   ```
+
+### 5. Integration Examples
+
+#### 1. VS Code Extension
+```typescript
+export class ASTProvider {
+    // Real-time AST updates
+    public onFileChange(uri: URI): void {
+        const ast = this.parser.parseFile(uri);
+        this.notifySubscribers(ast);
+    }
+}
+```
+
+#### 2. CI/CD Pipeline
+```yaml
+ast_analysis:
+  script:
+    - revelio analyze --codebase .
+    - revelio check --fail-on-complexity
+    - revelio security-scan
+```
+
+#### 3. Git Hooks
+```bash
+#!/bin/bash
+# pre-commit hook
+revelio check --staged --fail-on-error
+```
+
+### 6. Best Practices
+
+1. **Memory Efficiency**
+   - Use streaming parsers for large files
+   - Implement garbage collection for AST nodes
+   - Cache frequently accessed nodes
+
+2. **Performance**
+   - Parallel processing for multiple files
+   - Incremental updates for changed files
+   - Lazy loading for large files
+
+3. **Reliability**
+   - Error recovery in parsers
+   - Graceful degradation
+   - Fallback mechanisms
+
+### 7. Future Considerations
+
+1. **Machine Learning Integration**
+   - Pattern recognition
+   - Code suggestion
+   - Anomaly detection
+
+2. **Advanced Analysis**
+   - Data flow analysis
+   - Taint analysis
+   - Type inference
+
+3. **Scalability**
+   - Distributed processing
+   - Cloud integration
+   - Real-time collaboration
+
+### 8. User Journey: From ZIP Analysis to Code Understanding
+
+#### Current Flow (ZIP Analysis)
+```bash
+cargo run -- input.zip output.txt
+```
+Produces: `output.txt` with basic ZIP stats and file listing
+
+#### Enhanced Flow (Code Understanding)
+```bash
+# New command structure
+cargo run -- input.zip --output-prefix=myproject
+
+# Generates multiple specialized files:
+myproject_structure.txt    # Basic ZIP stats and structure (original output)
+myproject_ast.json        # AST representation of code
+myproject_deps.txt        # Dependency analysis
+myproject_security.txt    # Security insights
+myproject_docs.md         # Auto-generated documentation
+```
+
+#### Example Output Files
+
+1. **Structure File** (`myproject_structure.txt`):
+```
+=== ZIP Analysis Report ===
+Total size: 1.31 MiB
+Files analyzed: 6
+Analysis time: 0.29s
+...
+```
+
+2. **AST File** (`myproject_ast.json`):
+```json
+{
+  "project_analysis": {
+    "language_stats": {
+      "rust": "60%",
+      "java": "40%"
+    },
+    "complexity_metrics": {
+      "average_cyclomatic": 4.2,
+      "max_depth": 3
+    }
+  },
+  "files": [
+    {
+      "path": "src/main.rs",
+      "ast": { /* detailed AST structure */ }
+    }
+  ]
+}
+```
+
+3. **Dependencies File** (`myproject_deps.txt`):
+```
+=== Dependency Analysis ===
+Core Dependencies:
+  ├── tokio v1.x
+  │   └── Used in: 5 files
+  └── serde v1.x
+      └── Used in: 3 files
+
+Internal Dependencies:
+  src/parser.rs
+  ├── Used by: 4 modules
+  └── Depends on: 2 modules
+```
+
+4. **Security Report** (`myproject_security.txt`):
+```
+=== Security Analysis ===
+Risk Level: Low
+Findings:
+  - Unsafe block usage: 2 instances
+  - Public API exposure: 3 endpoints
+  - Input validation: All paths validated
+
+Recommendations:
+  1. Review unsafe blocks in src/parser.rs
+  2. Add rate limiting to public APIs
+```
+
+5. **Documentation** (`myproject_docs.md`):
+```markdown
+# Project Documentation
+
+## Core Components
+1. Parser Module
+   - Purpose: ZIP file parsing
+   - Key functions:
+     * parse_header()
+     * validate_structure()
+
+2. Analysis Module
+   - Purpose: Code analysis
+   - Features:
+     * AST generation
+     * Dependency tracking
+```
+
+#### Usage Evolution
+
+1. **Basic Usage** (Current):
+```bash
+# Original command
+cargo run -- chromium-main.zip output.txt
+
+# Output: Basic ZIP analysis
+```
+
+2. **Intermediate Usage** (AST Phase 1):
+```bash
+# With AST analysis
+cargo run -- chromium-main.zip --ast --output-prefix=chromium
+
+# Outputs:
+# - chromium_structure.txt (original analysis)
+# - chromium_ast.json (code structure)
+# - chromium_deps.txt (dependencies)
+```
+
+3. **Advanced Usage** (Full Features):
+```bash
+# Full analysis suite
+cargo run -- chromium-main.zip \
+  --output-prefix=chromium \
+  --ast \
+  --security \
+  --docs \
+  --deps \
+  --format=json
+
+# Additional features:
+--watch        # Real-time updates
+--diff=main   # Compare with main branch
+--focus=src/*  # Analyze specific paths
+```
+
+#### Integration Benefits
+
+1. **For Developers**:
+   - One tool for both ZIP and code analysis
+   - Consistent output format
+   - Progressive detail levels
+
+2. **For Teams**:
+   - Shared understanding of codebase
+   - Standardized documentation
+   - Security awareness
+
+3. **For CI/CD**:
+   - Automated analysis
+   - Quality gates
+   - Trend tracking
+
+#### Future Extensions
+
+1. **Interactive Mode**:
+```bash
+cargo run -- chromium-main.zip -i
+> analyze src/main.rs
+> show-deps tokio
+> find-usage parse_zip
+```
+
+2. **Report Aggregation**:
+```bash
+cargo run -- --merge-reports \
+  chromium_*.txt \
+  --output=summary.md
+```
+
+3. **Custom Plugins**:
+```rust
+// Plugin for custom analysis
+#[derive(RevelioPlugin)]
+pub struct CustomAnalyzer {
+    pub fn analyze(&self, ast: &AST) -> Analysis {
+        // Custom analysis logic
+    }
+}
+```
+
+This evolution maintains the simplicity of the original tool while adding powerful code understanding capabilities through modular output files and flexible analysis options.
+
+### 9. Simplified Output Organization
+
+#### New Command Structure
+```bash
+# Example command
+cargo run -- chromium-main.zip
+
+# Creates directory: chromium-main-20240117-143022/
+# (based on input filename and timestamp)
+```
+
+#### Directory Structure
+```
+chromium-main-20240117-143022/
+├── structure/
+│   ├── zip-stats.txt         # Basic ZIP analysis
+│   └── file-tree.txt         # File hierarchy
+│
+├── analysis/
+│   ├── ast.json             # AST representation
+│   ├── dependencies.txt      # Dependency graph
+│   └── metrics.json         # Code metrics
+│
+├── security/
+│   ├── report.txt           # Security findings
+│   └── recommendations.md   # Security fixes
+│
+├── docs/
+│   ├── README.md            # Auto-generated docs
+│   ├── api.md              # API documentation
+│   └── architecture.md      # Architecture overview
+│
+└── summary.md              # Overall analysis summary
+```
+
+#### Example Usage
+
+1. **Basic Analysis**:
+```bash
+# Run basic analysis
+cargo run -- project.zip
+Created: project-20240117-143022/
+```
+
+2. **With Focus Areas**:
+```bash
+# Analyze specific aspects
+cargo run -- project.zip --focus=security,docs
+Created: project-20240117-143022/
+└── Only security/ and docs/ directories created
+```
+
+3. **Continuous Monitoring**:
+```bash
+# Watch mode with timestamp-based directories
+cargo run -- project.zip --watch
+Created: project-20240117-143022/  # Initial
+Created: project-20240117-143156/  # After changes
+Created: project-20240117-143342/  # After more changes
+```
+
+#### Implementation
+```rust
+pub struct OutputManager {
+    base_dir: PathBuf,
+    timestamp: DateTime<Utc>,
+}
+
+impl OutputManager {
+    pub fn new(input_file: &Path) -> Self {
+        let timestamp = Utc::now();
+        let dirname = format!("{}-{}", 
+            input_file.file_stem().unwrap().to_str().unwrap(),
+            timestamp.format("%Y%m%d-%H%M%S")
+        );
+        
+        Self {
+            base_dir: PathBuf::from(dirname),
+            timestamp,
+        }
+    }
+
+    pub fn create_structure(&self) -> Result<()> {
+        // Create main directory
+        fs::create_dir_all(&self.base_dir)?;
+        
+        // Create subdirectories
+        let subdirs = ["structure", "analysis", "security", "docs"];
+        for dir in subdirs {
+            fs::create_dir(self.base_dir.join(dir))?;
+        }
+        
+        Ok(())
+    }
+
+    pub fn write_analysis(&self, analysis_type: AnalysisType, content: &str) -> Result<()> {
+        let path = match analysis_type {
+            AnalysisType::Ast => self.base_dir.join("analysis/ast.json"),
+            AnalysisType::Security => self.base_dir.join("security/report.txt"),
+            // ... other types
+        };
+        
+        fs::write(path, content)?;
+        Ok(())
+    }
+}
+```
+
+#### Benefits
+
+1. **Organization**:
+   - Clear directory structure
+   - Timestamp-based versioning
+   - Grouped by analysis type
+
+2. **History**:
+   - Keep multiple analysis runs
+   - Track changes over time
+   - Compare different versions
+
+3. **Flexibility**:
+   - Add new analysis types easily
+   - Selective analysis possible
+   - Clear separation of concerns
+
+4. **Integration**:
+   ```bash
+   # Git integration example
+   git diff \
+     project-20240117-143022/analysis/ast.json \
+     project-20240117-143156/analysis/ast.json
+   ```
+
+5. **Automation**:
+   ```bash
+   # CI/CD example
+   for commit in $(git rev-list HEAD); do
+     cargo run -- project.zip --commit=$commit
+   done
+   ```
+
+This organization makes it much easier to:
+- Track analysis history
+- Compare different versions
+- Automate analysis in CI/CD
+- Share results with team members
+
+### 10. HTML-Based Interactive Visualization
+
+#### Directory Structure 2.0
+```
+chromium-main-20240117-143022/
+├── index.html               # Main dashboard
+├── assets/                  # CSS, JS, and other assets
+│   ├── styles.css
+│   ├── main.js
+│   └── viz/                # Visualization libraries
+│       ├── d3.min.js
+│       └── graph.js
+│
+├── views/                   # Individual HTML views
+│   ├── structure.html      # ZIP structure view
+│   ├── ast-explorer.html   # Interactive AST viewer
+│   ├── dependencies.html   # Dependency graph
+│   ├── security.html       # Security dashboard
+│   └── docs.html          # Documentation viewer
+│
+└── data/                   # Raw data files
+    ├── ast.json
+    ├── metrics.json
+    └── security.json
+```
+
+#### Main Dashboard (index.html)
+```html
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Code Analysis Dashboard</title>
+    <link rel="stylesheet" href="assets/styles.css">
+</head>
+<body>
+    <nav class="sidebar">
+        <div class="project-info">
+            <h2>chromium-main</h2>
+            <span class="timestamp">2024-01-17 14:30:22</span>
+        </div>
+        
+        <ul class="nav-links">
+            <li><a href="views/structure.html">
+                📁 Structure
+                <span class="badge">2.3GB</span>
+            </a></li>
+            <li><a href="views/ast-explorer.html">
+                🔍 AST Explorer
+                <span class="badge">Interactive</span>
+            </a></li>
+            <li><a href="views/dependencies.html">
+                🔗 Dependencies
+                <span class="badge">Graph</span>
+            </a></li>
+            <li><a href="views/security.html">
+                🔒 Security
+                <span class="badge">3 findings</span>
+            </a></li>
+            <li><a href="views/docs.html">
+                📚 Documentation
+                <span class="badge">Auto-gen</span>
+            </a></li>
+        </ul>
+    </nav>
+
+    <main>
+        <div class="quick-stats">
+            <!-- Key metrics dashboard -->
+        </div>
+        <div class="recent-changes">
+            <!-- Latest findings -->
+        </div>
+    </main>
+
+    <script src="assets/main.js"></script>
+</body>
+</html>
+```
+
+#### Interactive AST Explorer (views/ast-explorer.html)
+```html
+<!DOCTYPE html>
+<html>
+<head>
+    <title>AST Explorer</title>
+    <link rel="stylesheet" href="../assets/styles.css">
+    <script src="../assets/viz/d3.min.js"></script>
+</head>
+<body>
+    <div class="split-view">
+        <!-- Tree View -->
+        <div class="tree-panel">
+            <div class="search-bar">
+                <input type="text" placeholder="Search AST...">
+            </div>
+            <div id="ast-tree"></div>
+        </div>
+
+        <!-- Details Panel -->
+        <div class="details-panel">
+            <div class="node-details">
+                <h3>Node Details</h3>
+                <div id="node-info"></div>
+            </div>
+            <div class="code-preview">
+                <h3>Source Code</h3>
+                <pre><code id="source"></code></pre>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Load and render AST
+        fetch('../data/ast.json')
+            .then(response => response.json())
+            .then(ast => {
+                renderAST(ast);
+                setupInteractions();
+            });
+    </script>
+</body>
+</html>
+```
+
+#### Implementation
+```rust
+pub struct HtmlGenerator {
+    output_dir: PathBuf,
+    data: AnalysisData,
+}
+
+impl HtmlGenerator {
+    pub fn new(output_dir: PathBuf, data: AnalysisData) -> Self {
+        Self { output_dir, data }
+    }
+
+    pub fn generate_all(&self) -> Result<()> {
+        // Create directory structure
+        self.create_directories()?;
+        
+        // Generate HTML files
+        self.generate_index()?;
+        self.generate_ast_explorer()?;
+        self.generate_dependency_view()?;
+        self.generate_security_dashboard()?;
+        self.generate_documentation()?;
+        
+        // Copy assets
+        self.copy_assets()?;
+        
+        // Generate data files
+        self.write_json_data()?;
+        
+        Ok(())
+    }
+
+    fn generate_ast_explorer(&self) -> Result<()> {
+        let template = self.load_template("ast-explorer")?;
+        let html = template.render(&self.data.ast)?;
+        
+        fs::write(
+            self.output_dir.join("views/ast-explorer.html"),
+            html
+        )?;
+        
+        Ok(())
+    }
+}
+```
+
+#### Features
+
+1. **Interactive AST Explorer**:
+   - Collapsible tree view
+   - Search functionality
+   - Node details on click
+   - Source code preview
+
+2. **Dependency Visualization**:
+   - Interactive graph
+   - Zoom and pan
+   - Click to explore
+   - Filter by type
+
+3. **Security Dashboard**:
+   - Risk level indicators
+   - Interactive findings list
+   - Code snippets
+   - Fix suggestions
+
+4. **Documentation Browser**:
+   - Full-text search
+   - Table of contents
+   - Code examples
+   - API references
+
+#### Benefits
+
+1. **User Experience**:
+   - No special tools needed (just a browser)
+   - Interactive exploration
+   - Visual representations
+   - Instant search
+
+2. **Integration**:
+   - Can be served from CI/CD
+   - Share via simple HTTP server
+   - Version control friendly
+   - Easy to extend
+
+3. **Development**:
+   - Modern web technologies
+   - Rich visualizations
+   - Interactive features
+   - Mobile-friendly
+
+This HTML-based approach makes the analysis results much more accessible and interactive, while still maintaining all the raw data in JSON format for programmatic access.
